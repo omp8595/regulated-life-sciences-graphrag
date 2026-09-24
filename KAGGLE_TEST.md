@@ -60,15 +60,56 @@ The final line should be:
 ALL KAGGLE SMOKE TESTS PASSED
 ```
 
-## Optional: launch the unified UI
+## 6. Test the full Gradio UI
+
+Use one shared database for the bootstrap script and the UI process:
 
 ```python
-import os
-os.environ["PLATFORM_ADMIN_KEY"] = "kaggle-demo-admin"
-os.environ["GRADIO_SHARE"] = "true"
+%env PRODUCT_DATA_DIR=/kaggle/working/regulated_graphrag_ui
+%env PRODUCT_DB_PATH=/kaggle/working/regulated_graphrag_ui/product.db
+%env PLATFORM_ADMIN_KEY=kaggle-demo-admin
+%env GRADIO_SHARE=true
+```
 
+Provision a demo tenant plus role-specific API keys:
+
+```python
+!python kaggle_ui_bootstrap.py
+```
+
+Copy the printed keys. You will use different keys in the same **API key**
+field to simulate the regulated roles.
+
+Launch the UI:
+
+```python
 !python product_ui.py
 ```
 
-Use the public Gradio URL printed by the process only for demonstration. This
-repository is a technical prototype and not a validated production GxP system.
+Open the public Gradio URL printed by the process.
+
+### UI validation sequence
+
+1. Paste the `ROLE_MEDICAL` key.
+2. **Document ingestion** → upload a text file containing ALPINE /
+   zanubrutinib evidence.
+3. **Governed query** → ask `BRUKINSA`. Confirm the result is
+   `EVIDENCE_ONLY` and shows semantic related match `zanubrutinib`.
+4. **Semantic catalog** → refresh and inspect BRUKINSA, zanubrutinib and ALPINE.
+5. Replace the key with the `ROLE_SEMANTIC_STEWARD` key.
+6. **Semantic governance** → propose `ADD_ALIAS` for
+   `BRAND:BRUKINSA`, for example `Brukinsa oncology brand`.
+7. Try approving with the same Steward key. It should be blocked because
+   self-approval is prohibited.
+8. Replace the API key with the `ROLE_REGULATORY` key.
+9. Refresh the semantic change queue and approve the pending request with
+   authorization confirmation checked.
+10. Return to **Semantic catalog** and confirm BRUKINSA is on the next active
+    semantic version and the new alias appears.
+11. Use **Governance dashboard** to confirm the tenant audit chain remains valid.
+
+The UI also contains the existing **SME validation** and **MLR review** tabs, so
+the same notebook can demonstrate the complete regulated lifecycle.
+
+Use the public Gradio URL only for demonstration. This repository is a technical
+prototype and not a validated production GxP system.
