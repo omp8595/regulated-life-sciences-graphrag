@@ -125,6 +125,78 @@ def record_mlr(api_key, review_id, decision, rationale, wording, conditions, con
     )
 
 
+def refresh_semantic_catalog(api_key):
+    return _result(_client().get("/v1/semantic/concepts", headers=_bearer(api_key)))
+
+
+def propose_semantic_change(
+    api_key,
+    change_type,
+    concept_id,
+    alias,
+    alias_source,
+    confidence,
+    system,
+    identifier,
+    source_uri,
+    canonical_name,
+    rationale,
+):
+    payload = {}
+    if change_type == "ADD_ALIAS":
+        payload = {
+            "alias": (alias or "").strip(),
+            "source": (alias_source or "GOVERNED_CHANGE").strip(),
+            "confidence": float(confidence),
+        }
+    elif change_type == "ADD_EXTERNAL_MAPPING":
+        payload = {
+            "system": (system or "").strip(),
+            "identifier": (identifier or "").strip(),
+            "source_uri": (source_uri or "").strip(),
+        }
+    elif change_type == "UPDATE_CONCEPT":
+        payload = {"canonical_name": (canonical_name or "").strip()}
+
+    return _result(
+        _client().post(
+            "/v1/semantic/change-requests",
+            headers=_bearer(api_key),
+            json={
+                "change_type": change_type,
+                "concept_id": (concept_id or "").strip(),
+                "payload": payload,
+                "rationale": rationale,
+            },
+        )
+    )
+
+
+def refresh_semantic_changes(api_key):
+    changes = _result(
+        _client().get("/v1/semantic/change-requests", headers=_bearer(api_key))
+    )
+    pending = [item for item in changes if item["status"] == "PENDING"]
+    choices = [item["change_request_id"] for item in pending]
+    return gr.update(choices=choices, value=choices[0] if choices else None), changes
+
+
+def decide_semantic_change(api_key, change_request_id, decision, rationale, confirmed):
+    if not change_request_id:
+        raise gr.Error("Select a pending semantic change request.")
+    return _result(
+        _client().post(
+            f"/v1/semantic/change-requests/{change_request_id}/decisions",
+            headers=_bearer(api_key),
+            json={
+                "decision": decision,
+                "rationale": rationale,
+                "authorization_confirmed": confirmed,
+            },
+        )
+    )
+
+
 def governance_status(api_key):
     principal = _principal(api_key)
     tenant_id = principal["tenant_id"]
@@ -163,7 +235,7 @@ CSS = """
 def build_ui():
     with gr.Blocks(title="Governed Life Sciences GraphRAG", css=CSS) as demo:
         gr.HTML("""<div class='hero'><h1>Governed Life Sciences GraphRAG</h1>
-        <p>Multi-tenant evidence ingestion, governed retrieval, SME validation, MLR approval and audit.</p></div>""")
+        <p>Multi-tenant evidence ingestion, semantic master, governed retrieval, semantic governance, SME validation, MLR approval and audit.</p></div>""")
         gr.HTML("<div class='notice'><b>Prototype notice:</b> Do not validate or approve unless you are a genuinely authorized reviewer.</div>")
         api_key = gr.Textbox(label="API key", type="password", placeholder="rgp_…")
 
@@ -219,6 +291,90 @@ def build_ui():
                 record_mlr,
                 [api_key, review_id, mlr_decision, mlr_rationale, approved_wording, conditions, mlr_confirm, days_valid],
                 mlr_output,
+            )
+
+        with gr.Tab("Semantic catalog"):
+            semantic_refresh = gr.Button("Refresh semantic master")
+            semantic_catalog = gr.JSON(label="Active canonical concepts, aliases and external mappings")
+            semantic_refresh.click(refresh_semantic_catalog, api_key, semantic_catalog)
+
+        with gr.Tab("Semantic governance"):
+            gr.Markdown(
+                "Propose controlled semantic-master changes. "
+                "Approval requires an independent Regulatory or Semantic Steward reviewer."
+            )
+            with gr.Row():
+                semantic_change_type = gr.Dropdown(
+                    ["ADD_ALIAS", "ADD_EXTERNAL_MAPPING", "UPDATE_CONCEPT"],
+                    value="ADD_ALIAS",
+                    label="Change type",
+                )
+                semantic_concept_id = gr.Textbox(
+                    value="BRAND:BRUKINSA",
+                    label="Canonical concept ID",
+                    placeholder="e.g. BRAND:BRUKINSA",
+                )
+            with gr.Accordion("Alias payload", open=True):
+                semantic_alias = gr.Textbox(label="Alias", placeholder="e.g. Brukinsa oncology brand")
+                semantic_alias_source = gr.Textbox(value="ENTERPRISE_MASTER", label="Alias source")
+                semantic_confidence = gr.Slider(0.0, 1.0, value=0.95, step=0.01, label="Alias confidence")
+            with gr.Accordion("External mapping payload", open=False):
+                semantic_system = gr.Textbox(label="Terminology system", placeholder="e.g. RXNORM")
+                semantic_identifier = gr.Textbox(label="External identifier")
+                semantic_source_uri = gr.Textbox(label="Authoritative source URI")
+            with gr.Accordion("Canonical concept update", open=False):
+                semantic_canonical_name = gr.Textbox(label="New canonical name")
+            semantic_rationale = gr.Textbox(label="Proposal rationale", lines=4)
+            semantic_propose = gr.Button("Submit semantic change request", variant="primary")
+            semantic_proposal_output = gr.JSON(label="Proposal result")
+            semantic_propose.click(
+                propose_semantic_change,
+                [
+                    api_key,
+                    semantic_change_type,
+                    semantic_concept_id,
+                    semantic_alias,
+                    semantic_alias_source,
+                    semantic_confidence,
+                    semantic_system,
+                    semantic_identifier,
+                    semantic_source_uri,
+                    semantic_canonical_name,
+                    semantic_rationale,
+                ],
+                semantic_proposal_output,
+            )
+
+            gr.Markdown("### Independent review")
+            semantic_queue_refresh = gr.Button("Refresh semantic change queue")
+            semantic_change_id = gr.Dropdown([], label="Pending change request")
+            semantic_change_queue = gr.JSON(label="Semantic governance queue")
+            semantic_queue_refresh.click(
+                refresh_semantic_changes,
+                api_key,
+                [semantic_change_id, semantic_change_queue],
+            )
+            semantic_decision = gr.Radio(
+                ["APPROVED", "REJECTED"],
+                value="REJECTED",
+                label="Reviewer decision",
+            )
+            semantic_decision_rationale = gr.Textbox(label="Reviewer rationale", lines=4)
+            semantic_confirm = gr.Checkbox(
+                label="I confirm that I am independently authorized to make this semantic-governance decision"
+            )
+            semantic_decide = gr.Button("Record semantic decision")
+            semantic_decision_output = gr.JSON(label="Semantic decision result")
+            semantic_decide.click(
+                decide_semantic_change,
+                [
+                    api_key,
+                    semantic_change_id,
+                    semantic_decision,
+                    semantic_decision_rationale,
+                    semantic_confirm,
+                ],
+                semantic_decision_output,
             )
 
         with gr.Tab("Governance dashboard"):
