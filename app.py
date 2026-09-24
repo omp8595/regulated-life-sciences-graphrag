@@ -288,8 +288,11 @@ def build_app() -> gr.Blocks:
 
 
 if __name__ == "__main__":
+    configured_port = os.getenv("PORT")
     build_app().launch(
         server_name="0.0.0.0",
-        server_port=int(os.getenv("PORT", "7860")),
+        # Let Gradio select the next available port in notebooks unless a
+        # deployment platform explicitly provides PORT.
+        server_port=int(configured_port) if configured_port else None,
         share=os.getenv("GRADIO_SHARE", "false").lower() == "true",
     )
