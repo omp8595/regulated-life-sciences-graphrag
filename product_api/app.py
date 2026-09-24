@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 
@@ -19,6 +21,7 @@ DATA_DIR = Path(os.getenv("PRODUCT_DATA_DIR", BASE_DIR / "product_data"))
 DB_PATH = Path(os.getenv("PRODUCT_DB_PATH", DATA_DIR / "product.db"))
 OBJECT_DIR = DATA_DIR / "objects"
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+PLATFORM_ADMIN_KEY = os.getenv("PLATFORM_ADMIN_KEY", "")
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", ".csv", ".json"}
 
 
@@ -123,6 +126,15 @@ def initialize_database() -> None:
                 record_hash TEXT NOT NULL,
                 created_at_utc TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS api_principals (
+                principal_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                actor_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                api_key_hash TEXT UNIQUE NOT NULL,
+                status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_documents_tenant
                 ON documents(tenant_id, created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_jobs_tenant
@@ -135,6 +147,8 @@ def initialize_database() -> None:
                 ON graph_edges(tenant_id, source_node_id, target_node_id);
             CREATE INDEX IF NOT EXISTS idx_audit_tenant
                 ON audit_events(tenant_id, sequence_number);
+            CREATE INDEX IF NOT EXISTS idx_principals_tenant
+                ON api_principals(tenant_id, actor_id, role);
             """
         )
 
@@ -209,6 +223,42 @@ class TenantCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
 
 
+class ApiKeyCreate(BaseModel):
+    tenant_id: str
+    actor_id: str = Field(min_length=2, max_length=120)
+    role: str = Field(pattern=r"^ROLE_[A-Z_]+$")
+
+
+class QueryRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=4000)
+    purpose: str = Field(min_length=2, max_length=100)
+    market: str = Field(min_length=2, max_length=100)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def hash_api_key(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode()).hexdigest()
+
+
+def authenticated_principal(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> TenantContext:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(401, "Bearer authentication is required")
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT tenant_id, actor_id, role FROM api_principals
+               WHERE api_key_hash=? AND status='ACTIVE'""",
+            (hash_api_key(credentials.credentials),),
+        ).fetchone()
+    if not row:
+        raise HTTPException(401, "Invalid or inactive API key")
+    return TenantContext(**dict(row))
+
+
 app = FastAPI(
     title="Regulated Life Sciences GraphRAG API",
     version="0.1.0",
@@ -237,6 +287,71 @@ def create_tenant(request: TenantCreate) -> dict:
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "Tenant already exists") from exc
     return request.model_dump()
+
+
+@app.post("/v1/auth/api-keys", status_code=201)
+def create_api_key(
+    request: ApiKeyCreate,
+    platform_admin_key: Annotated[str | None, Header(alias="X-Platform-Admin-Key")] = None,
+) -> dict:
+    if not PLATFORM_ADMIN_KEY:
+        raise HTTPException(503, "API-key provisioning is disabled until PLATFORM_ADMIN_KEY is configured")
+    if not platform_admin_key or not hmac.compare_digest(platform_admin_key, PLATFORM_ADMIN_KEY):
+        raise HTTPException(403, "Valid platform administrator authorization is required")
+    raw_key = f"rgp_{uuid.uuid4().hex}{uuid.uuid4().hex}"
+    principal_id = f"PRN_{uuid.uuid4().hex[:12].upper()}"
+    with connection() as conn:
+        tenant = conn.execute("SELECT tenant_id FROM tenants WHERE tenant_id=?", (request.tenant_id,)).fetchone()
+        if not tenant:
+            raise HTTPException(404, "Tenant not found")
+        conn.execute(
+            "INSERT INTO api_principals VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?)",
+            (principal_id, request.tenant_id, request.actor_id, request.role, hash_api_key(raw_key), utc_now()),
+        )
+    return {
+        "principal_id": principal_id,
+        "tenant_id": request.tenant_id,
+        "actor_id": request.actor_id,
+        "role": request.role,
+        "api_key": raw_key,
+        "warning": "Store this key securely; it will not be shown again.",
+    }
+
+
+@app.post("/v1/query")
+def governed_query(
+    request: QueryRequest,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    from product_api.retrieval import hybrid_search
+
+    result = hybrid_search(
+        question=request.question,
+        tenant_id=principal.tenant_id,
+        role=principal.role,
+        purpose=request.purpose,
+        market=request.market,
+        top_k=request.top_k,
+    )
+    with connection() as conn:
+        audit_id = append_audit(
+            conn,
+            principal,
+            "GOVERNED_QUERY_DECISION",
+            f"QRY_{uuid.uuid4().hex[:12].upper()}",
+            {
+                "question_sha256": hashlib.sha256(request.question.encode()).hexdigest(),
+                "purpose": request.purpose,
+                "market": request.market,
+                "decision_status": result["status"],
+                "response_type": result["response_type"],
+                "result_count": result["result_count"],
+            },
+        )
+    result.update(
+        {"audit_id": audit_id, "actor_id": principal.actor_id, "role": principal.role, "purpose": request.purpose}
+    )
+    return result
 
 
 @app.post("/v1/documents", status_code=202)
