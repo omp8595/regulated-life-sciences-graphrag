@@ -380,6 +380,51 @@ class ProductApiTests(unittest.TestCase):
         self.assertGreater(result["results"][0]["graph_score"], 0)
         self.assertIn("zanubrutinib", result["results"][0]["semantic_related_matches"])
 
+    def test_medical_evidence_workspace_formats_semantics_governance_and_lineage(self):
+        from product_ui import _workspace_evidence_rows, _workspace_provenance_rows, _workspace_summary
+
+        result = {
+            "status": "EVIDENCE_ONLY",
+            "response_type": "EVIDENCE_DISCOVERY",
+            "market": "Global",
+            "role": "ROLE_MEDICAL",
+            "purpose": "MEDICAL_RESPONSE",
+            "audit_id": "AUD_TEST",
+            "governance_message": "Permitted evidence was found; it is not an SME-validated governed answer.",
+            "resolved_entities": ["BRUKINSA"],
+            "results": [
+                {
+                    "text": "zanubrutinib evidence",
+                    "file_name": "alpine.txt",
+                    "document_id": "DOC_1",
+                    "chunk_id": "CHK_1",
+                    "page_number": 1,
+                    "market": "Global",
+                    "data_class": "MEDICAL_SCIENTIFIC_EVIDENCE",
+                    "usage_condition": "AUTHORIZED_MEDICAL_USE_WITH_CITATION",
+                    "hybrid_score": 0.175,
+                    "semantic_direct_matches": [],
+                    "semantic_related_matches": ["zanubrutinib"],
+                }
+            ],
+        }
+
+        summary = _workspace_summary(result, "What evidence supports BRUKINSA?")
+        self.assertIn("Evidence discovery", summary)
+        self.assertIn("BRUKINSA", summary)
+        self.assertIn("BRAND_OF", summary)
+        self.assertIn("AUD_TEST", summary)
+
+        evidence = _workspace_evidence_rows(result)
+        self.assertEqual(evidence[0][0], "Evidence")
+        self.assertEqual(evidence[0][3], "NOT_SME_VALIDATED")
+        self.assertEqual(evidence[0][7], "zanubrutinib")
+
+        provenance = _workspace_provenance_rows(result)
+        self.assertEqual(provenance[0][0], "alpine.txt")
+        self.assertEqual(provenance[0][1], "DOC_1")
+        self.assertEqual(provenance[0][2], "CHK_1")
+
     def test_unified_product_ui_builds(self):
         from product_ui import build_ui
 
