@@ -93,6 +93,24 @@ def initialize_database() -> None:
                 finding_value TEXT NOT NULL,
                 created_at_utc TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS graph_nodes (
+                node_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                node_type TEXT NOT NULL,
+                label TEXT NOT NULL,
+                properties_json TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(tenant_id, node_type, label)
+            );
+            CREATE TABLE IF NOT EXISTS graph_edges (
+                edge_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                source_node_id TEXT NOT NULL REFERENCES graph_nodes(node_id),
+                target_node_id TEXT NOT NULL REFERENCES graph_nodes(node_id),
+                relationship_type TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(tenant_id, source_node_id, target_node_id, relationship_type)
+            );
             CREATE TABLE IF NOT EXISTS audit_events (
                 sequence_number INTEGER PRIMARY KEY AUTOINCREMENT,
                 audit_id TEXT UNIQUE NOT NULL,
@@ -111,6 +129,10 @@ def initialize_database() -> None:
                 ON ingestion_jobs(tenant_id, created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_chunks_tenant_document
                 ON document_chunks(tenant_id, document_id, chunk_sequence);
+            CREATE INDEX IF NOT EXISTS idx_graph_nodes_tenant
+                ON graph_nodes(tenant_id, node_type, label);
+            CREATE INDEX IF NOT EXISTS idx_graph_edges_tenant
+                ON graph_edges(tenant_id, source_node_id, target_node_id);
             CREATE INDEX IF NOT EXISTS idx_audit_tenant
                 ON audit_events(tenant_id, sequence_number);
             """
