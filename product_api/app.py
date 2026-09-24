@@ -135,6 +135,51 @@ def initialize_database() -> None:
                 status TEXT NOT NULL,
                 created_at_utc TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS candidate_claims (
+                candidate_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                document_id TEXT NOT NULL REFERENCES documents(document_id),
+                chunk_id TEXT NOT NULL REFERENCES document_chunks(chunk_id),
+                proposed_text TEXT NOT NULL,
+                claim_type TEXT NOT NULL,
+                market TEXT NOT NULL,
+                data_class TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(tenant_id, chunk_id)
+            );
+            CREATE TABLE IF NOT EXISTS sme_review_decisions (
+                decision_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                candidate_id TEXT NOT NULL REFERENCES candidate_claims(candidate_id),
+                reviewer_actor_id TEXT NOT NULL,
+                reviewer_role TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS governed_claims (
+                claim_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                candidate_id TEXT NOT NULL REFERENCES candidate_claims(candidate_id),
+                claim_text TEXT NOT NULL,
+                claim_type TEXT NOT NULL,
+                market TEXT NOT NULL,
+                data_class TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                approval_status TEXT NOT NULL,
+                validated_by TEXT NOT NULL,
+                validated_at_utc TEXT NOT NULL,
+                UNIQUE(tenant_id, candidate_id, version)
+            );
+            CREATE TABLE IF NOT EXISTS governed_claim_evidence (
+                claim_id TEXT NOT NULL REFERENCES governed_claims(claim_id),
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                document_id TEXT NOT NULL REFERENCES documents(document_id),
+                chunk_id TEXT NOT NULL REFERENCES document_chunks(chunk_id),
+                PRIMARY KEY (tenant_id, claim_id, chunk_id)
+            );
             CREATE INDEX IF NOT EXISTS idx_documents_tenant
                 ON documents(tenant_id, created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_jobs_tenant
@@ -149,6 +194,10 @@ def initialize_database() -> None:
                 ON audit_events(tenant_id, sequence_number);
             CREATE INDEX IF NOT EXISTS idx_principals_tenant
                 ON api_principals(tenant_id, actor_id, role);
+            CREATE INDEX IF NOT EXISTS idx_candidates_tenant_status
+                ON candidate_claims(tenant_id, status, created_at_utc);
+            CREATE INDEX IF NOT EXISTS idx_governed_claims_tenant
+                ON governed_claims(tenant_id, status, market);
             """
         )
 
@@ -234,6 +283,12 @@ class QueryRequest(BaseModel):
     purpose: str = Field(min_length=2, max_length=100)
     market: str = Field(min_length=2, max_length=100)
     top_k: int = Field(default=5, ge=1, le=20)
+
+
+class SmeDecisionRequest(BaseModel):
+    decision: str = Field(pattern=r"^(VALIDATED|REJECTED|NEEDS_REVISION)$")
+    rationale: str = Field(min_length=20, max_length=4000)
+    authorization_confirmed: bool
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -352,6 +407,84 @@ def governed_query(
         {"audit_id": audit_id, "actor_id": principal.actor_id, "role": principal.role, "purpose": request.purpose}
     )
     return result
+
+
+@app.get("/v1/sme/candidates")
+def list_sme_candidates(
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> list[dict]:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized SME role is required")
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT candidate_id, document_id, chunk_id, proposed_text, claim_type,
+                      market, data_class, status, created_at_utc
+               FROM candidate_claims WHERE tenant_id=? AND status='PENDING'
+               ORDER BY created_at_utc""",
+            (principal.tenant_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/v1/sme/candidates/{candidate_id}/decisions")
+def record_sme_decision(
+    candidate_id: str,
+    request: SmeDecisionRequest,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized SME role is required")
+    if request.decision == "VALIDATED" and not request.authorization_confirmed:
+        raise HTTPException(403, "Explicit SME authorization confirmation is required")
+    with connection() as conn:
+        candidate = conn.execute(
+            "SELECT * FROM candidate_claims WHERE tenant_id=? AND candidate_id=?",
+            (principal.tenant_id, candidate_id),
+        ).fetchone()
+        if not candidate:
+            raise HTTPException(404, "Candidate not found")
+        if candidate["status"] != "PENDING":
+            raise HTTPException(409, "Candidate has already been reviewed")
+        decision_id = f"SME_{uuid.uuid4().hex[:12].upper()}"
+        conn.execute(
+            "INSERT INTO sme_review_decisions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                decision_id, principal.tenant_id, candidate_id, principal.actor_id,
+                principal.role, request.decision, request.rationale, utc_now(),
+            ),
+        )
+        claim_id = None
+        if request.decision == "VALIDATED":
+            claim_id = f"CLM_{uuid.uuid4().hex[:12].upper()}"
+            conn.execute(
+                """INSERT INTO governed_claims VALUES
+                   (?, ?, ?, ?, ?, ?, ?, 1, 'ACTIVE', 'NOT_MLR_REVIEWED', ?, ?)""",
+                (
+                    claim_id, principal.tenant_id, candidate_id, candidate["proposed_text"],
+                    candidate["claim_type"], candidate["market"], candidate["data_class"],
+                    principal.actor_id, utc_now(),
+                ),
+            )
+            conn.execute(
+                "INSERT INTO governed_claim_evidence VALUES (?, ?, ?, ?)",
+                (claim_id, principal.tenant_id, candidate["document_id"], candidate["chunk_id"]),
+            )
+        conn.execute(
+            "UPDATE candidate_claims SET status=? WHERE tenant_id=? AND candidate_id=?",
+            (request.decision, principal.tenant_id, candidate_id),
+        )
+        audit_id = append_audit(
+            conn, principal, "SME_REVIEW_DECISION", candidate_id,
+            {"decision": request.decision, "decision_id": decision_id, "claim_id": claim_id},
+        )
+    return {
+        "decision_id": decision_id,
+        "candidate_id": candidate_id,
+        "decision": request.decision,
+        "claim_id": claim_id,
+        "approval_status": "NOT_MLR_REVIEWED" if claim_id else None,
+        "audit_id": audit_id,
+    }
 
 
 @app.post("/v1/documents", status_code=202)
