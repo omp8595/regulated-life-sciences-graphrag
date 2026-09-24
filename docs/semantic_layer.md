@@ -11,6 +11,54 @@ The semantic layer is deliberately separate from SME validation and MLR
 approval. It can normalize what an entity *is* and how curated concepts relate;
 it cannot decide that a scientific statement is true, approved, or promotional.
 
+## v3 semantic governance
+
+Changes to the platform semantic master now follow a governed lifecycle rather
+than direct database edits.
+
+```text
+Authorized contributor
+  -> semantic change request
+  -> PENDING
+  -> independent Regulatory / Semantic Steward review
+  -> APPROVED | REJECTED
+  -> transactional master-data application
+  -> previous concept version SUPERSEDED
+  -> new concept version ACTIVE
+  -> hash-linked audit event
+```
+
+Supported governed changes in v3:
+
+- `ADD_ALIAS`
+- `ADD_EXTERNAL_MAPPING`
+- `UPDATE_CONCEPT`
+
+Controls:
+
+- Contributors require Medical, Regulatory, or Semantic Steward authorization.
+- Approval requires Regulatory or Semantic Steward authorization.
+- A proposer cannot approve their own change.
+- Approval requires explicit authorization confirmation and reviewer rationale.
+- Approved changes create a new semantic concept version.
+- Existing aliases, external mappings, and typed relationships are carried
+  forward to the new version.
+- The previous concept version and its version-specific semantic records are
+  retained as `SUPERSEDED`.
+- Application is transactional: a failed semantic update does not leave a
+  partially superseded master.
+- Proposal and decision events are recorded in the existing tenant audit chain.
+
+API endpoints:
+
+- `POST /v1/semantic/change-requests`
+- `GET /v1/semantic/change-requests`
+- `POST /v1/semantic/change-requests/{change_request_id}/decisions`
+
+The semantic master remains platform-level shared metadata. Governance requests
+are tenant-attributed for accountability and audit lineage; approved platform
+master changes become visible to governed retrieval across tenants.
+
 ## v2 semantic master
 
 Semantic concepts are now persisted as platform master data rather than used directly from Python constants. The bootstrap registry seeds the database idempotently, after which ingestion and retrieval read the active semantic master.
