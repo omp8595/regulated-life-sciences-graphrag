@@ -48,6 +48,18 @@ discover permitted evidence that uses the molecule name `zanubrutinib` even
 when the literal brand name is absent. The semantic registry is deterministic
 and curated; it does not create regulatory or promotional claims.
 
+## Governed semantic-master changes
+
+Semantic master edits are proposed through authenticated change requests rather
+than written directly. `ROLE_MEDICAL`, `ROLE_REGULATORY`, and
+`ROLE_SEMANTIC_STEWARD` can propose supported changes. Approval is restricted
+to an independent `ROLE_REGULATORY` or `ROLE_SEMANTIC_STEWARD` reviewer.
+
+An approved alias, external mapping, or canonical-name change creates the next
+active concept version and retains the previous version as `SUPERSEDED`.
+Approval requires explicit authorization confirmation and a substantive
+rationale. Proposal and decision events are hash-audited.
+
 ## Tenant-scoped hybrid retrieval
 
 ```python
