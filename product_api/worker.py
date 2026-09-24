@@ -238,6 +238,28 @@ def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_w
             )
             graph_edges = index_graph(conn, tenant_id, document, chunks)
 
+            conn.execute(
+                "UPDATE ingestion_jobs SET stage='CANDIDATE_EXTRACTION', updated_at_utc=? WHERE job_id=?",
+                (utc_now(), job_id),
+            )
+            candidate_count = 0
+            chunk_rows = conn.execute(
+                """SELECT chunk_id, chunk_text FROM document_chunks
+                   WHERE tenant_id=? AND document_id=? ORDER BY chunk_sequence""",
+                (tenant_id, document["document_id"]),
+            ).fetchall()
+            for chunk_row in chunk_rows:
+                conn.execute(
+                    """INSERT OR IGNORE INTO candidate_claims VALUES
+                       (?, ?, ?, ?, ?, 'EVIDENCE_STATEMENT', ?, ?, 'PENDING', ?)""",
+                    (
+                        f"CAND_{uuid.uuid4().hex[:12].upper()}", tenant_id,
+                        document["document_id"], chunk_row["chunk_id"], chunk_row["chunk_text"],
+                        document["market"], document["data_class"], utc_now(),
+                    ),
+                )
+                candidate_count += 1
+
             # No candidate becomes a claim here. Human validation remains mandatory.
             conn.execute(
                 "UPDATE documents SET status='READY_FOR_SME_REVIEW' WHERE document_id=? AND tenant_id=?",
@@ -259,6 +281,7 @@ def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_w
                 "chunks_created": len(chunks),
                 "finding_types": [f[0] for f in findings],
                 "graph_edges_created": graph_edges,
+                "candidates_created": candidate_count,
                 "audit_id": audit_id,
                 "idempotent": False,
             }
