@@ -19,7 +19,8 @@ Source documents
 
 ## Capabilities
 
-- Canonical pharma semantic layer with alias normalization and typed relationships
+- Canonical pharma semantic layer with versioned master data, alias normalization and typed relationships
+- Governed semantic change requests with independent approval, version supersession and audit lineage
 - Hybrid lexical retrieval and graph traversal with one-hop semantic expansion
 - Multi-hop GraphRAG with source, document, page, and chunk lineage
 - Role-, purpose-, market-, and data-class-aware access controls
