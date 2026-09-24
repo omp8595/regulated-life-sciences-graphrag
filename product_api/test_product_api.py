@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -21,7 +22,8 @@ class ProductApiTests(unittest.TestCase):
         self.client.__enter__()
         with connection() as conn:
             for table in (
-                "governed_claim_evidence", "governed_claims", "sme_review_decisions",
+                "mlr_review_decisions", "mlr_review_queue", "governed_claim_evidence",
+                "governed_claims", "sme_review_decisions",
                 "candidate_claims", "graph_edges", "graph_nodes", "document_findings",
                 "document_chunks", "audit_events", "api_principals",
                 "ingestion_jobs", "documents", "tenants",
@@ -152,6 +154,63 @@ class ProductApiTests(unittest.TestCase):
         self.assertEqual(query["status"], "ANSWERED")
         self.assertEqual(query["response_type"], "GOVERNED_ANSWER")
         self.assertEqual(query["governed_claims"][0]["approval_status"], "NOT_MLR_REVIEWED")
+
+    def test_mlr_approval_controls_promotional_eligibility_and_dates(self):
+        upload = self.client.post(
+            "/v1/documents", headers=self.headers("tenant_a"),
+            files={"file": ("mlr.txt", b"ALPINE evaluated zanubrutinib and ibrutinib in CLL.", "text/plain")},
+            data={"market": "Global", "data_class": "MEDICAL_SCIENTIFIC_EVIDENCE", "sensitivity": "MEDICAL_ONLY"},
+        ).json()
+        process_ingestion_job(upload["job_id"], "tenant_a")
+
+        def issue(actor, role):
+            return self.client.post(
+                "/v1/auth/api-keys", headers={"X-Platform-Admin-Key": "test-platform-admin-key"},
+                json={"tenant_id": "tenant_a", "actor_id": actor, "role": role},
+            ).json()["api_key"]
+
+        sme_auth = {"Authorization": f"Bearer {issue('sme_1', 'ROLE_MEDICAL')}"}
+        candidate = self.client.get("/v1/sme/candidates", headers=sme_auth).json()[0]
+        self.client.post(
+            f"/v1/sme/candidates/{candidate['candidate_id']}/decisions", headers=sme_auth,
+            json={"decision": "VALIDATED", "rationale": "The statement is traceable to the reviewed evidence passage.", "authorization_confirmed": True},
+        )
+        commercial_auth = {"Authorization": f"Bearer {issue('commercial_1', 'ROLE_COMMERCIAL')}"}
+        before = self.client.post(
+            "/v1/query", headers=commercial_auth,
+            json={"question": "What did ALPINE evaluate?", "purpose": "PROMOTIONAL_CONTENT", "market": "Global"},
+        ).json()
+        self.assertEqual(before["status"], "BLOCKED")
+
+        mlr_auth = {"Authorization": f"Bearer {issue('mlr_1', 'ROLE_MLR_REVIEWER')}"}
+        review = self.client.get("/v1/mlr/reviews", headers=mlr_auth).json()[0]
+        no_confirmation = self.client.post(
+            f"/v1/mlr/reviews/{review['review_id']}/decisions", headers=mlr_auth,
+            json={
+                "decision": "APPROVED", "rationale": "Medical, legal and regulatory review has been completed.",
+                "authorization_confirmed": False,
+                "effective_from_utc": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+                "expires_at_utc": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+            },
+        )
+        self.assertEqual(no_confirmation.status_code, 403)
+        approved = self.client.post(
+            f"/v1/mlr/reviews/{review['review_id']}/decisions", headers=mlr_auth,
+            json={
+                "decision": "APPROVED", "rationale": "Medical, legal and regulatory review has been completed.",
+                "authorization_confirmed": True, "conditions_of_use": "MLR_APPROVED_WORDING_ONLY",
+                "effective_from_utc": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+                "expires_at_utc": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+            },
+        )
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.json()["approval_status"], "MLR_APPROVED")
+        after = self.client.post(
+            "/v1/query", headers=commercial_auth,
+            json={"question": "What did ALPINE evaluate?", "purpose": "PROMOTIONAL_CONTENT", "market": "Global"},
+        ).json()
+        self.assertEqual(after["status"], "ANSWERED")
+        self.assertEqual(after["governed_claims"][0]["usage_condition"], "MLR_APPROVED_WORDING_ONLY")
 
     def test_hybrid_retrieval_is_tenant_market_and_policy_scoped(self):
         response = self.client.post(
