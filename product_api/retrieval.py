@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from product_api.app import connection, initialize_database
 from product_api.semantic.store import concept_labels, resolve_mentions, semantic_match
+from product_api.evidence_intelligence import get_evidence_intelligence
 
 
 WORD = re.compile(r"[a-zA-Z0-9]+")
@@ -100,6 +101,9 @@ def hybrid_search(
                         "semantic_direct_matches": concept_labels(conn, semantic["direct_matches"]),
                         "semantic_related_matches": concept_labels(conn, semantic["related_matches"]),
                         "usage_condition": condition,
+                        "evidence_intelligence": get_evidence_intelligence(
+                            conn, tenant_id, claim["chunk_id"]
+                        ),
                     }
                 )
         governed_matches.sort(key=lambda item: item["score"], reverse=True)
@@ -160,6 +164,9 @@ def hybrid_search(
                         "semantic_direct_matches": concept_labels(conn, semantic["direct_matches"]),
                         "semantic_related_matches": concept_labels(conn, semantic["related_matches"]),
                         "usage_condition": condition,
+                        "evidence_intelligence": get_evidence_intelligence(
+                            conn, tenant_id, row["chunk_id"]
+                        ),
                     }
                 )
 
