@@ -5,11 +5,15 @@ from product_api.semantic.registry import (
     ExternalMapping,
     ResolvedConcept,
     SemanticRelationship,
-    canonical_ids,
+)
+from product_api.semantic.store import (
+    concept_labels,
     get_concept,
+    list_semantic_concepts,
     related_concept_ids,
     relationships_for_concepts,
     resolve_mentions,
+    seed_semantic_master,
     semantic_match,
 )
 
@@ -20,10 +24,12 @@ __all__ = [
     "ExternalMapping",
     "ResolvedConcept",
     "SemanticRelationship",
-    "canonical_ids",
+    "concept_labels",
     "get_concept",
+    "list_semantic_concepts",
     "related_concept_ids",
     "relationships_for_concepts",
     "resolve_mentions",
+    "seed_semantic_master",
     "semantic_match",
 ]
