@@ -237,7 +237,7 @@ class ProductApiTests(unittest.TestCase):
             relationships = {
                 row["relationship"]
                 for row in conn.execute(
-                    """SELECT e.relationship
+                    """SELECT e.relationship_type AS relationship
                        FROM graph_edges e
                        JOIN graph_nodes source ON source.node_id=e.source_node_id AND source.tenant_id=e.tenant_id
                        JOIN graph_nodes target ON target.node_id=e.target_node_id AND target.tenant_id=e.tenant_id
