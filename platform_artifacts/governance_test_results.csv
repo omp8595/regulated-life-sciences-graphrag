@@ -1,0 +1,22 @@
+test_id,description,expected,actual,passed,tested_at_utc
+GOV_001,Commercial internal access to US label dosage,ANSWERED,ANSWERED,True,2026-09-23T11:57:11.367143+00:00
+GOV_002,US dosage answer uses governed-answer path,GOVERNED_ANSWER,GOVERNED_ANSWER,True,2026-09-23T11:57:11.367143+00:00
+GOV_003,US dosage answer contains a citation,True,True,True,2026-09-23T11:57:11.367143+00:00
+GOV_004,Unreviewed dosage blocked from promotional use,BLOCKED,BLOCKED,True,2026-09-23T11:57:11.367143+00:00
+GOV_005,Blocked promotional dosage exposes no evidence,0,0,True,2026-09-23T11:57:11.367143+00:00
+GOV_006,US dosage cannot answer an India question,ABSTAIN,ABSTAIN,True,2026-09-23T11:57:11.367143+00:00
+GOV_007,India abstention contains no US citation,0,0,True,2026-09-23T11:57:11.367143+00:00
+GOV_008,Unsupported market produces abstention,ABSTAIN,ABSTAIN,True,2026-09-23T11:57:11.367143+00:00
+GOV_009,Medical efficacy request finds evidence,EVIDENCE_ONLY,EVIDENCE_ONLY,True,2026-09-23T11:57:11.367143+00:00
+GOV_010,Evidence is not represented as a governed answer,EVIDENCE_DISCOVERY,EVIDENCE_DISCOVERY,True,2026-09-23T11:57:11.367143+00:00
+GOV_011,Medical evidence discovery returns passages,True,True,True,2026-09-23T11:57:11.367143+00:00
+GOV_012,Commercial promotional efficacy request blocked,BLOCKED,BLOCKED,True,2026-09-23T11:57:11.367143+00:00
+GOV_013,Blocked efficacy request exposes no passages,0,0,True,2026-09-23T11:57:11.367143+00:00
+GOV_014,Restricted clinical data denied to Commercial,DENY,DENY,True,2026-09-23T11:57:11.367143+00:00
+GOV_015,Patient-level data denied to Commercial,DENY,DENY,True,2026-09-23T11:57:11.367143+00:00
+GOV_016,Unsupported question produces abstention,ABSTAIN,ABSTAIN,True,2026-09-23T11:57:11.367143+00:00
+GOV_017,Medical can access China publication claim,ANSWERED,ANSWERED,True,2026-09-23T11:57:11.367143+00:00
+GOV_018,China publication includes citation,True,True,True,2026-09-23T11:57:11.367143+00:00
+GOV_019,No fictional MLR approvals exist,0,0,True,2026-09-23T11:57:11.367143+00:00
+GOV_020,Every governed claim has evidence linkage,8,8,True,2026-09-23T11:57:11.367143+00:00
+GOV_021,Audit record hashes and links are valid,True,True,True,2026-09-23T11:57:11.367143+00:00

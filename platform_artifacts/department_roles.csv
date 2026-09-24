@@ -1,0 +1,7 @@
+role_id,department,description
+ROLE_COMMERCIAL,Commercial,"Commercial strategy, analytics and approved promotional activities"
+ROLE_MEDICAL,Medical Affairs,Non-promotional scientific and medical response
+ROLE_CLINICAL,Clinical / R&D,Clinical development and trial analysis
+ROLE_REGULATORY,Regulatory,"Submission, labeling and regulatory analysis"
+ROLE_SAFETY,Pharmacovigilance,Aggregate and case-level safety operations
+ROLE_MLR_REVIEWER,MLR,"Authorized medical, legal and regulatory review"

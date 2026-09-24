@@ -1,0 +1,163 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d4" for="edge" attr.name="governance_status" attr.type="string"/>
+<key id="d3" for="edge" attr.name="relationship_type" attr.type="string"/>
+<key id="d2" for="node" attr.name="subtype" attr.type="string"/>
+<key id="d1" for="node" attr.name="label" attr.type="string"/>
+<key id="d0" for="node" attr.name="node_type" attr.type="string"/>
+<graph edgedefault="directed"><node id="DRUG_ZANUBRUTINIB">
+  <data key="d0">ENTITY</data>
+  <data key="d1">BRUKINSA</data>
+  <data key="d2">DRUG</data>
+</node>
+<node id="CLM_9A0C1079EAD6">
+  <data key="d0">CLAIM</data>
+  <data key="d1">The preferred generic name is zanubrutinib.</data>
+  <data key="d2">IDENTITY</data>
+</node>
+<node id="CLM_DAB8AF3FCA4E">
+  <data key="d0">CLAIM</data>
+  <data key="d1">Zanubrutinib is marketed under the brand name BRUKINSA.</data>
+  <data key="d2">IDENTITY</data>
+</node>
+<node id="CLM_969067DB02D4">
+  <data key="d0">CLAIM</data>
+  <data key="d1">Zanubrutinib is administered orally.</data>
+  <data key="d2">ROUTE</data>
+</node>
+<node id="CLM_897156E235B6">
+  <data key="d0">CLAIM</data>
+  <data key="d1">BRUKINSA is associated with FDA application NDA 213217.</data>
+  <data key="d2">REGULATORY</data>
+</node>
+<node id="CLM_2B5297E80F47">
+  <data key="d0">CLAIM</data>
+  <data key="d1">The ALPINE study is registered as NCT03734016.</data>
+  <data key="d2">CLINICAL_STUDY</data>
+</node>
+<node id="CLM_D962881F38A3">
+  <data key="d0">CLAIM</data>
+  <data key="d1">The ALPINE interim analysis is available as PMC9928683.</data>
+  <data key="d2">PUBLICATION</data>
+</node>
+<node id="CLM_118DDEE7F473">
+  <data key="d0">CLAIM</data>
+  <data key="d1">The ALPINE China subgroup analysis is available as PMC11512864.</data>
+  <data key="d2">PUBLICATION</data>
+</node>
+<node id="CLM_57ACADA96115">
+  <data key="d0">CLAIM</data>
+  <data key="d1">The recommended dosage of BRUKINSA is 160 mg orally twice daily or 320 mg orally once daily.</data>
+  <data key="d2">DOSAGE</data>
+</node>
+<node id="SRC_LABEL_US">
+  <data key="d0">SOURCE</data>
+  <data key="d1">BRUKINSA US Prescribing Information</data>
+  <data key="d2">APPROVED_LABEL</data>
+</node>
+<node id="SRC_ALPINE_INTERIM">
+  <data key="d0">SOURCE</data>
+  <data key="d1">ALPINE Interim Analysis</data>
+  <data key="d2">SCIENTIFIC_PUBLICATION</data>
+</node>
+<node id="SRC_ALPINE_CHINA">
+  <data key="d0">SOURCE</data>
+  <data key="d1">ALPINE China Subgroup Analysis</data>
+  <data key="d2">SCIENTIFIC_PUBLICATION</data>
+</node>
+<node id="SRC_TRIAL_ALPINE">
+  <data key="d0">SOURCE</data>
+  <data key="d1">ALPINE Clinical Trial Registry</data>
+  <data key="d2">TRIAL_REGISTRY</data>
+</node>
+<node id="DOC_448A3EF9F119">
+  <data key="d0">DOCUMENT</data>
+  <data key="d1">20260913_3e08fe23-d70e-424c-bc51-1222e320f902 (1).pdf</data>
+  <data key="d2">APPROVED_LABEL</data>
+</node>
+<node id="DOC_21FF4F1370C5">
+  <data key="d0">DOCUMENT</data>
+  <data key="d1">jco-41-1035 (2).pdf</data>
+  <data key="d2">SCIENTIFIC_PUBLICATION</data>
+</node>
+<node id="DOC_5D2D931F3757">
+  <data key="d0">DOCUMENT</data>
+  <data key="d1">s00277-024-05823-8 (1).pdf</data>
+  <data key="d2">SCIENTIFIC_PUBLICATION</data>
+</node>
+<edge source="DRUG_ZANUBRUTINIB" target="CLM_9A0C1079EAD6">
+  <data key="d3">HAS_GENERIC_NAME</data>
+  <data key="d4">NOT_MLR_REVIEWED</data>
+</edge>
+<edge source="DRUG_ZANUBRUTINIB" target="CLM_DAB8AF3FCA4E">
+  <data key="d3">HAS_BRAND_NAME</data>
+  <data key="d4">NOT_MLR_REVIEWED</data>
+</edge>
+<edge source="DRUG_ZANUBRUTINIB" target="CLM_969067DB02D4">
+  <data key="d3">HAS_ROUTE</data>
+  <data key="d4">NOT_MLR_REVIEWED</data>
+</edge>
+<edge source="DRUG_ZANUBRUTINIB" target="CLM_897156E235B6">
+  <data key="d3">HAS_FDA_APPLICATION</data>
+  <data key="d4">NOT_MLR_REVIEWED</data>
+</edge>
+<edge source="DRUG_ZANUBRUTINIB" target="CLM_2B5297E80F47">
+  <data key="d3">STUDIED_IN</data>
+  <data key="d4">NOT_MLR_REVIEWED</data>
+</edge>
+<edge source="DRUG_ZANUBRUTINIB" target="CLM_D962881F38A3">
+  <data key="d3">HAS_PUBLICATION</data>
+  <data key="d4">NOT_MLR_REVIEWED</data>
+</edge>
+<edge source="DRUG_ZANUBRUTINIB" target="CLM_118DDEE7F473">
+  <data key="d3">HAS_PUBLICATION</data>
+  <data key="d4">NOT_MLR_REVIEWED</data>
+</edge>
+<edge source="DRUG_ZANUBRUTINIB" target="CLM_57ACADA96115">
+  <data key="d3">HAS_RECOMMENDED_DOSAGE</data>
+  <data key="d4">NOT_MLR_REVIEWED</data>
+</edge>
+<edge source="CLM_9A0C1079EAD6" target="SRC_LABEL_US">
+  <data key="d3">SUPPORTED_BY</data>
+  <data key="d4">DIRECT_SUPPORT</data>
+</edge>
+<edge source="CLM_DAB8AF3FCA4E" target="SRC_LABEL_US">
+  <data key="d3">SUPPORTED_BY</data>
+  <data key="d4">DIRECT_SUPPORT</data>
+</edge>
+<edge source="CLM_969067DB02D4" target="SRC_LABEL_US">
+  <data key="d3">SUPPORTED_BY</data>
+  <data key="d4">DIRECT_SUPPORT</data>
+</edge>
+<edge source="CLM_897156E235B6" target="SRC_LABEL_US">
+  <data key="d3">SUPPORTED_BY</data>
+  <data key="d4">DIRECT_SUPPORT</data>
+</edge>
+<edge source="CLM_2B5297E80F47" target="SRC_TRIAL_ALPINE">
+  <data key="d3">SUPPORTED_BY</data>
+  <data key="d4">DIRECT_SUPPORT</data>
+</edge>
+<edge source="CLM_D962881F38A3" target="SRC_ALPINE_INTERIM">
+  <data key="d3">SUPPORTED_BY</data>
+  <data key="d4">DIRECT_SUPPORT</data>
+</edge>
+<edge source="CLM_118DDEE7F473" target="SRC_ALPINE_CHINA">
+  <data key="d3">SUPPORTED_BY</data>
+  <data key="d4">DIRECT_SUPPORT</data>
+</edge>
+<edge source="CLM_57ACADA96115" target="SRC_LABEL_US">
+  <data key="d3">SUPPORTED_BY</data>
+  <data key="d4">DIRECT_SUPPORT</data>
+</edge>
+<edge source="SRC_LABEL_US" target="DOC_448A3EF9F119">
+  <data key="d3">REPRESENTED_BY_DOCUMENT</data>
+  <data key="d4">AUTHORITATIVE</data>
+</edge>
+<edge source="SRC_ALPINE_INTERIM" target="DOC_21FF4F1370C5">
+  <data key="d3">REPRESENTED_BY_DOCUMENT</data>
+  <data key="d4">AUTHORITATIVE</data>
+</edge>
+<edge source="SRC_ALPINE_CHINA" target="DOC_5D2D931F3757">
+  <data key="d3">REPRESENTED_BY_DOCUMENT</data>
+  <data key="d4">AUTHORITATIVE</data>
+</edge>
+</graph></graphml>

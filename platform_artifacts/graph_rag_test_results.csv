@@ -1,0 +1,6 @@
+test,role,purpose,market,question,intent,status,retrieval_mode,resolved_entities,result_count,top_file,top_page,graph_distance,graph_rag_score
+1,ROLE_COMMERCIAL,INTERNAL_INSIGHT,United States,What dosage is described for BRUKINSA?,DOSAGE,EVIDENCE_FOUND,GRAPH_RAG,"DRUG_ZANUBRUTINIB, BRAND_BRUKINSA",3,20260913_3e08fe23-d70e-424c-bc51-1222e320f902 (1).pdf,4,4,0.1602
+2,ROLE_MEDICAL,MEDICAL_RESPONSE,Global,What efficacy results were reported in ALPINE?,EFFICACY,EVIDENCE_FOUND,GRAPH_RAG,TRIAL_ALPINE,3,jco-41-1035 (2).pdf,7,4,0.1149
+3,ROLE_MEDICAL,MEDICAL_RESPONSE,China,What efficacy results were reported in the ALPINE China subgroup?,EFFICACY,EVIDENCE_FOUND,GRAPH_RAG,"TRIAL_ALPINE, PUBLICATION_ALPINE_CHINA",3,s00277-024-05823-8 (1).pdf,2,3,0.1838
+4,ROLE_COMMERCIAL,PROMOTIONAL_CONTENT,United States,What efficacy results were reported in ALPINE?,EFFICACY,BLOCKED,GRAPH_RAG,TRIAL_ALPINE,0,,,,
+5,ROLE_COMMERCIAL,INTERNAL_INSIGHT,India,What is the approved dosage in India?,DOSAGE,ABSTAIN,GRAPH_RAG,LABEL_BRUKINSA_US,0,,,,

@@ -1,0 +1,19 @@
+{
+  "platform_name": "Regulated Life Sciences Context Platform",
+  "built_at_utc": "2026-09-23T12:03:01.183842+00:00",
+  "documents_ingested": 3,
+  "document_chunks": 221,
+  "governed_claims": 8,
+  "candidate_claims": 354,
+  "pending_mlr_reviews": 5,
+  "recorded_mlr_decisions": 0,
+  "audit_records": 12,
+  "governance_tests_passed": 21,
+  "governance_tests_total": 21,
+  "audit_chain_valid": true,
+  "source_documents": [
+    "20260913_3e08fe23-d70e-424c-bc51-1222e320f902 (1).pdf",
+    "jco-41-1035 (2).pdf",
+    "s00277-024-05823-8 (1).pdf"
+  ]
+}

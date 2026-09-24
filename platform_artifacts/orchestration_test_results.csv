@@ -1,0 +1,5 @@
+role,purpose,market,question,status,response_type,citation_count,evidence_count,answer,audit_id
+ROLE_COMMERCIAL,INTERNAL_INSIGHT,United States,What is the approved dosage for BRUKINSA?,ANSWERED,GOVERNED_ANSWER,1,0,The recommended dosage of BRUKINSA is 160 mg orally twice daily or 320 mg orally once daily.,AUD_857FCC763011
+ROLE_COMMERCIAL,PROMOTIONAL_CONTENT,United States,What is the ALPINE interim publication?,BLOCKED,POLICY_BLOCK,0,0,"Relevant governed knowledge exists, but its use is not permitted for this role and purpose.",AUD_BEBC95EC8887
+ROLE_MEDICAL,MEDICAL_RESPONSE,Global,What efficacy results were reported in ALPINE?,EVIDENCE_ONLY,EVIDENCE_DISCOVERY,0,3,"Relevant permitted evidence was found, but no SME-validated governed claim supports a final answer yet.",AUD_A8D314C4C6CE
+ROLE_COMMERCIAL,INTERNAL_INSIGHT,India,What is the approved dosage in India?,ABSTAIN,NO_SUPPORT,0,0,"No authoritative, supported and permitted answer was found for the India market.",AUD_8FC3229CD251

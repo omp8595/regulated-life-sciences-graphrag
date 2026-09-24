@@ -1,0 +1,12 @@
+department,data_asset,data_class,sensitivity,commercial_access
+Clinical / R&D,Public trial registry,PUBLIC_TRIAL_METADATA,PUBLIC,READ_ONLY
+Clinical / R&D,Clinical study report,CLINICAL_RESTRICTED,RESTRICTED,DENIED
+Clinical / R&D,Patient-level trial data,PATIENT_LEVEL_DATA,HIGHLY_RESTRICTED,DENIED
+Medical Affairs,Peer-reviewed publication,MEDICAL_SCIENTIFIC_EVIDENCE,MEDICAL_ONLY,INTERNAL_NON_PROMOTIONAL_ONLY
+Medical Affairs,Medical information response,MEDICAL_RESPONSE_CONTENT,CONTROLLED,DENIED
+Regulatory,Approved prescribing information,APPROVED_LABEL_CONTENT,CONTROLLED,READ_ONLY_CURRENT_LABEL
+Regulatory,Regulatory submission metadata,REGULATORY_INFORMATION,CONTROLLED,INTERNAL_INFORMATIONAL_USE
+Commercial,Public product information,PUBLIC_PRODUCT_INFORMATION,PUBLIC,ALLOWED
+Commercial,Approved promotional claim,PROMOTIONAL_CLAIM,MLR_CONTROLLED,MLR_APPROVED_ONLY
+Commercial,Aggregated commercial analytics,COMMERCIAL_ANALYTICS,INTERNAL,ALLOWED
+Pharmacovigilance,Individual safety case,PATIENT_LEVEL_DATA,HIGHLY_RESTRICTED,DENIED

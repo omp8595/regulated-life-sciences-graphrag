@@ -1,0 +1,15 @@
+test_id,description,expected,actual,passed,tested_at_utc
+GRAG_001,Existing governed dosage remains authoritative,GOVERNED_ANSWER,GOVERNED_ANSWER,True,2026-09-23T12:21:23.464797+00:00
+GRAG_002,Governed answer does not expose raw chunks,0,0,True,2026-09-23T12:21:23.464797+00:00
+GRAG_003,Promotional efficacy remains blocked,BLOCKED,BLOCKED,True,2026-09-23T12:21:23.464797+00:00
+GRAG_004,Blocked request performs no evidence exposure,0,0,True,2026-09-23T12:21:23.464797+00:00
+GRAG_005,Medical efficacy uses evidence-discovery path,EVIDENCE_DISCOVERY,EVIDENCE_DISCOVERY,True,2026-09-23T12:21:23.464797+00:00
+GRAG_006,Medical evidence contains graph paths,True,True,True,2026-09-23T12:21:23.464797+00:00
+GRAG_007,Medical evidence contains graph distances,True,True,True,2026-09-23T12:21:23.464797+00:00
+GRAG_008,Global efficacy resolves to interim publication,True,True,True,2026-09-23T12:21:23.464797+00:00
+GRAG_009,China efficacy resolves to China publication,True,True,True,2026-09-23T12:21:23.464797+00:00
+GRAG_010,China evidence contains graph paths,True,True,True,2026-09-23T12:21:23.464797+00:00
+GRAG_011,India dosage still abstains,ABSTAIN,ABSTAIN,True,2026-09-23T12:21:23.464797+00:00
+GRAG_012,India abstention exposes no graph evidence,0,0,True,2026-09-23T12:21:23.464797+00:00
+GRAG_013,Graph contains all indexed evidence chunks,221,221,True,2026-09-23T12:21:23.464797+00:00
+GRAG_014,Audit chain remains valid after GraphRAG queries,True,True,True,2026-09-23T12:21:23.464797+00:00

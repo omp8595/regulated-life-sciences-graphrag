@@ -1,0 +1,4 @@
+document_id,file_name,file_path,file_extension,document_type,sha256,file_size_bytes,page_count,extracted_characters,ingestion_status,ingested_at_utc
+DOC_448A3EF9F119,20260913_3e08fe23-d70e-424c-bc51-1222e320f902 (1).pdf,/kaggle/working/source_documents/20260913_3e08fe23-d70e-424c-bc51-1222e320f902 (1).pdf,.pdf,APPROVED_LABEL,500282557b420fba1382f061ba0c617092e7002facf3fa40e1a9a33b57a6454e,651769,50,104722,INGESTED,2026-09-23T11:42:47.778832+00:00
+DOC_21FF4F1370C5,jco-41-1035 (2).pdf,/kaggle/working/source_documents/jco-41-1035 (2).pdf,.pdf,SCIENTIFIC_PUBLICATION,9fc50e060862df2819aaf39fc4cd6b1f4895b29ee3640d4bab8807d5a3c24671,540583,12,54301,INGESTED,2026-09-23T11:42:47.869574+00:00
+DOC_5D2D931F3757,s00277-024-05823-8 (1).pdf,/kaggle/working/source_documents/s00277-024-05823-8 (1).pdf,.pdf,SCIENTIFIC_PUBLICATION,be10b007ac0f462e95c04ed4ee51528abe10c165a2b41a440cfa6e52a07a21c6,1423051,9,37849,INGESTED,2026-09-23T11:42:47.970834+00:00

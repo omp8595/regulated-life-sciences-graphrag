@@ -1,0 +1,18 @@
+{
+  "platform": "Governed Life Sciences GraphRAG Platform",
+  "built_at_utc": "2026-09-23T12:23:40.640522+00:00",
+  "retrieval_architecture": "GOVERNED_MULTI_HOP_GRAPH_RAG",
+  "graph_nodes": 244,
+  "graph_edges": 521,
+  "evidence_chunk_nodes": 221,
+  "documents_ingested": 3,
+  "document_chunks": 221,
+  "governed_claims": 8,
+  "candidate_claims": 354,
+  "core_governance_tests": "21/21",
+  "graph_rag_governance_tests": "14/14",
+  "audit_records": 22,
+  "audit_chain_valid": true,
+  "mlr_approvals": 0,
+  "sme_validated_candidates": 0
+}

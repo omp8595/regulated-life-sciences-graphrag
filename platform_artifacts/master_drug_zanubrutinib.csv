@@ -1,0 +1,2 @@
+drug_id,preferred_name,brand_name,development_code,drug_class,route,unii,cas_number,pubchem_cid,drugbank_id,atc_code,fda_application_number,dailymed_set_id,clinical_trial_id,pmcid_interim_alpine,pmcid_china_subgroup,pmcid_final_alpine,primary_market
+DRUG_ZANUBRUTINIB,zanubrutinib,BRUKINSA,BGB-3111,Bruton's tyrosine kinase inhibitor,Oral,AG9MHG098Z,1691249-45-2,135565884,DB15035,L01EL03,NDA 213217,3e08fe23-d70e-424c-bc51-1222e320f902,NCT03734016,PMC9928683,PMC11512864,PMC11738031,United States

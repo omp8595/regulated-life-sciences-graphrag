@@ -1,0 +1,5 @@
+source_id,document_id,source_title,source_type,market,authority_status,source_url,local_file_name
+SRC_LABEL_US,DOC_448A3EF9F119,BRUKINSA US Prescribing Information,APPROVED_LABEL,United States,AUTHORITATIVE,https://dailymed.nlm.nih.gov/dailymed/getFile.cfm?setid=3e08fe23-d70e-424c-bc51-1222e320f902&type=pdf,20260913_3e08fe23-d70e-424c-bc51-1222e320f902 (1).pdf
+SRC_ALPINE_INTERIM,DOC_21FF4F1370C5,ALPINE Interim Analysis,SCIENTIFIC_PUBLICATION,Global,AUTHORITATIVE,https://pmc.ncbi.nlm.nih.gov/articles/PMC9928683/,jco-41-1035 (2).pdf
+SRC_ALPINE_CHINA,DOC_5D2D931F3757,ALPINE China Subgroup Analysis,SCIENTIFIC_PUBLICATION,China,AUTHORITATIVE,https://pmc.ncbi.nlm.nih.gov/articles/PMC11512864/,s00277-024-05823-8 (1).pdf
+SRC_TRIAL_ALPINE,,ALPINE Clinical Trial Registry,TRIAL_REGISTRY,Global,AUTHORITATIVE,https://clinicaltrials.gov/study/NCT03734016,
