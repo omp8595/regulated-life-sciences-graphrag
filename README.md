@@ -42,6 +42,7 @@ Source documents
 - `app.py` — runnable governed GraphRAG Gradio interface
 - `smoke_test.py` — deterministic role, purpose and market smoke tests
 - `product_api/` — multi-tenant ingestion and audit API foundation
+- `product_ui.py` — unified ingestion, query, SME, MLR and governance workspace
 - `platform_artifacts/` — database, graph, retrieval index, policies, audit logs, test results, and source documents
 - `release/` — complete downloadable ZIP archive
 - `requirements.txt` — Python dependencies for rebuilding the prototype
@@ -61,6 +62,13 @@ uvicorn product_api.app:app --reload --port 8000
 ```
 
 The interactive API documentation is available at `http://127.0.0.1:8000/docs`.
+
+Run the unified product interface:
+
+```bash
+export PLATFORM_ADMIN_KEY="configure-in-your-secret-manager"
+GRADIO_SHARE=true python product_ui.py
+```
 
 The smoke suite verifies governed US dosage, promotional blocking, medical evidence discovery and India-market abstention.
 
