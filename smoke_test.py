@@ -21,6 +21,15 @@ def main() -> None:
             failures.append((name, expected, actual))
     if failures:
         raise SystemExit(f"Smoke tests failed: {failures}")
+
+    complex_result = orchestrate(
+        "How did zanubrutinib compare with ibrutinib regarding efficacy and cardiac safety?",
+        "ROLE_MEDICAL", "MEDICAL_RESPONSE", "Global"
+    )
+    focuses = {item.get("focus") for item in complex_result.get("evidence_results", [])}
+    if not {"EFFICACY", "SAFETY"}.issubset(focuses):
+        raise SystemExit(f"Complex evidence coverage failed: {focuses}")
+    print("PASS | Complex evidence covers EFFICACY and SAFETY")
     print(f"All {len(CASES)} smoke tests passed.")
 
 
