@@ -64,13 +64,31 @@ INTENT_RULES = {
     "IDENTITY": ("what is", "brand", "generic", "name"),
 }
 
+FOCUS_QUERY_TERMS = {
+    "EFFICACY": "overall response rate ORR progression-free survival treatment response comparative efficacy",
+    "SAFETY": "cardiac safety atrial fibrillation adverse events hypertension hemorrhage toxicity",
+    "DOSAGE": "recommended dosage dose administration milligrams",
+    "TRIAL_DESIGN": "randomized phase enrollment endpoint study design",
+    "PUBLICATION": "publication analysis article manuscript",
+    "CLINICAL_STUDY": "clinical trial registry NCT study",
+}
+
 
 def detect_intent(question: str) -> str:
+    return detect_intents(question)[0]
+
+
+def detect_intents(question: str) -> list[str]:
     text = question.lower()
-    for intent, terms in INTENT_RULES.items():
-        if any(term in text for term in terms):
-            return intent
-    return "UNKNOWN"
+    detected = [
+        intent for intent, terms in INTENT_RULES.items()
+        if any(term in text for term in terms)
+    ]
+    # IDENTITY terms such as "what is" are generic and should not override
+    # more specific regulated intents.
+    if len(detected) > 1 and "IDENTITY" in detected:
+        detected.remove("IDENTITY")
+    return detected or ["UNKNOWN"]
 
 
 def explicit_market(question: str, selected_market: str) -> str:
@@ -149,7 +167,9 @@ def governed_claim_answer(question: str, role: str, purpose: str, market: str) -
     }
 
 
-def retrieve_evidence(question: str, market: str, top_k: int = 3) -> list[dict]:
+def retrieve_evidence(question: str, market: str, top_k: int = 3, focus: str | None = None) -> list[dict]:
+    if focus and focus != "UNKNOWN":
+        question = f"{question} {FOCUS_QUERY_TERMS.get(focus, focus.lower().replace('_', ' '))}"
     word_query = INDEX["word_vectorizer"].transform([question])
     character_query = INDEX["character_vectorizer"].transform([question])
     word_scores = cosine_similarity(word_query, INDEX["word_matrix"]).ravel()
@@ -171,6 +191,7 @@ def retrieve_evidence(question: str, market: str, top_k: int = 3) -> list[dict]:
             "file": row.file_name,
             "page": int(row.page_number),
             "score": round(float(row.score), 4),
+            "focus": focus or "GENERAL",
             "passage": str(row.chunk_text)[:900],
         }
         for row in chunks.itertuples()
@@ -184,37 +205,51 @@ def orchestrate(question: str, role: str, purpose: str, selected_market: str) ->
         return {"status": "ABSTAIN", "answer": "Enter a question.", "citations": [], "evidence_results": []}
 
     market = explicit_market(question, selected_market)
-    governed = governed_claim_answer(question, role, purpose, market)
-    if governed is not None:
-        return governed
-
-    intent = detect_intent(question)
+    intents = detect_intents(question)
+    intent = intents[0]
     if role == "ROLE_COMMERCIAL" and purpose == "PROMOTIONAL_CONTENT":
         return {
             "status": "BLOCKED", "response_type": "POLICY_BLOCK",
             "answer": "Relevant evidence may exist, but promotional use requires genuine MLR approval.",
-            "citations": [], "evidence_results": [], "intent": intent, "market": market,
+            "citations": [], "evidence_results": [], "intent": intent, "intents": intents, "market": market,
         }
+
+    # A single-intent request may be resolved deterministically from a governed
+    # claim. Multi-intent questions stay on the evidence-discovery path until an
+    # authorized SME validates a composite claim.
+    if len(intents) == 1:
+        governed = governed_claim_answer(question, role, purpose, market)
+        if governed is not None:
+            governed["intents"] = intents
+            return governed
 
     if market not in {"United States", "Global", "China"}:
         return {
             "status": "ABSTAIN", "response_type": "NO_SUPPORT",
             "answer": f"No authoritative, supported and permitted answer was found for the {market} market.",
-            "citations": [], "evidence_results": [], "intent": intent, "market": market,
+            "citations": [], "evidence_results": [], "intent": intent, "intents": intents, "market": market,
         }
 
-    evidence = retrieve_evidence(question, market)
+    evidence = []
+    seen = set()
+    for focus in intents:
+        for item in retrieve_evidence(question, market, top_k=2, focus=focus):
+            key = (item["file"], item["page"], item["passage"])
+            if key not in seen:
+                evidence.append(item)
+                seen.add(key)
+    evidence = evidence[:6]
     if not evidence:
         return {
             "status": "ABSTAIN", "response_type": "NO_SUPPORT",
             "answer": "No authoritative, supported and permitted evidence was found.",
-            "citations": [], "evidence_results": [], "intent": intent, "market": market,
+            "citations": [], "evidence_results": [], "intent": intent, "intents": intents, "market": market,
         }
 
     return {
         "status": "EVIDENCE_ONLY", "response_type": "EVIDENCE_DISCOVERY",
         "answer": "Relevant permitted evidence was found, but no SME-validated governed claim supports a final answer yet.",
-        "citations": [], "evidence_results": evidence, "intent": intent, "market": market,
+        "citations": [], "evidence_results": evidence, "intent": intent, "intents": intents, "market": market,
     }
 
 
@@ -222,7 +257,7 @@ def run_ui(question: str, role: str, purpose: str, market: str):
     result = orchestrate(question, role, purpose, market)
     citations = "\n".join(f"- [{c['title']}]({c['url']})" for c in result.get("citations", [])) or "No governed citation returned."
     evidence = "\n\n".join(
-        f"### Evidence {i}\n**File:** {item['file']} — page {item['page']} — score {item['score']}\n\n> {item['passage']}"
+        f"### Evidence {i}\n**Focus:** {item.get('focus', 'GENERAL')}  \n**File:** {item['file']} — page {item['page']} — score {item['score']}\n\n> {item['passage']}"
         for i, item in enumerate(result.get("evidence_results", []), 1)
     ) or "No raw evidence exposed."
     trace = json.dumps({k: v for k, v in result.items() if k not in {"answer", "evidence_results"}}, indent=2)
