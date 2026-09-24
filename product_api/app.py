@@ -171,6 +171,9 @@ def initialize_database() -> None:
                 approval_status TEXT NOT NULL,
                 validated_by TEXT NOT NULL,
                 validated_at_utc TEXT NOT NULL,
+                effective_from_utc TEXT,
+                expires_at_utc TEXT,
+                conditions_of_use TEXT,
                 UNIQUE(tenant_id, candidate_id, version)
             );
             CREATE TABLE IF NOT EXISTS governed_claim_evidence (
@@ -179,6 +182,30 @@ def initialize_database() -> None:
                 document_id TEXT NOT NULL REFERENCES documents(document_id),
                 chunk_id TEXT NOT NULL REFERENCES document_chunks(chunk_id),
                 PRIMARY KEY (tenant_id, claim_id, chunk_id)
+            );
+            CREATE TABLE IF NOT EXISTS mlr_review_queue (
+                review_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                claim_id TEXT NOT NULL REFERENCES governed_claims(claim_id),
+                market TEXT NOT NULL,
+                review_status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(tenant_id, claim_id)
+            );
+            CREATE TABLE IF NOT EXISTS mlr_review_decisions (
+                mlr_decision_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                review_id TEXT NOT NULL REFERENCES mlr_review_queue(review_id),
+                claim_id TEXT NOT NULL REFERENCES governed_claims(claim_id),
+                reviewer_actor_id TEXT NOT NULL,
+                reviewer_role TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                approved_wording TEXT,
+                conditions_of_use TEXT,
+                effective_from_utc TEXT,
+                expires_at_utc TEXT,
+                created_at_utc TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_documents_tenant
                 ON documents(tenant_id, created_at_utc);
@@ -198,8 +225,15 @@ def initialize_database() -> None:
                 ON candidate_claims(tenant_id, status, created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_governed_claims_tenant
                 ON governed_claims(tenant_id, status, market);
+            CREATE INDEX IF NOT EXISTS idx_mlr_queue_tenant_status
+                ON mlr_review_queue(tenant_id, review_status, created_at_utc);
             """
         )
+        # Lightweight SQLite migration support for databases created by older prototype versions.
+        existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(governed_claims)")}
+        for column in ("effective_from_utc", "expires_at_utc", "conditions_of_use"):
+            if column not in existing_columns:
+                conn.execute(f"ALTER TABLE governed_claims ADD COLUMN {column} TEXT")
 
 
 class TenantContext(BaseModel):
@@ -289,6 +323,16 @@ class SmeDecisionRequest(BaseModel):
     decision: str = Field(pattern=r"^(VALIDATED|REJECTED|NEEDS_REVISION)$")
     rationale: str = Field(min_length=20, max_length=4000)
     authorization_confirmed: bool
+
+
+class MlrDecisionRequest(BaseModel):
+    decision: str = Field(pattern=r"^(APPROVED|APPROVED_WITH_CHANGES|REJECTED)$")
+    rationale: str = Field(min_length=20, max_length=4000)
+    authorization_confirmed: bool
+    approved_wording: str | None = Field(default=None, max_length=8000)
+    conditions_of_use: str | None = Field(default=None, max_length=2000)
+    effective_from_utc: datetime | None = None
+    expires_at_utc: datetime | None = None
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -457,8 +501,10 @@ def record_sme_decision(
         if request.decision == "VALIDATED":
             claim_id = f"CLM_{uuid.uuid4().hex[:12].upper()}"
             conn.execute(
-                """INSERT INTO governed_claims VALUES
-                   (?, ?, ?, ?, ?, ?, ?, 1, 'ACTIVE', 'NOT_MLR_REVIEWED', ?, ?)""",
+                """INSERT INTO governed_claims
+                   (claim_id, tenant_id, candidate_id, claim_text, claim_type, market,
+                    data_class, version, status, approval_status, validated_by, validated_at_utc)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'ACTIVE', 'NOT_MLR_REVIEWED', ?, ?)""",
                 (
                     claim_id, principal.tenant_id, candidate_id, candidate["proposed_text"],
                     candidate["claim_type"], candidate["market"], candidate["data_class"],
@@ -468,6 +514,10 @@ def record_sme_decision(
             conn.execute(
                 "INSERT INTO governed_claim_evidence VALUES (?, ?, ?, ?)",
                 (claim_id, principal.tenant_id, candidate["document_id"], candidate["chunk_id"]),
+            )
+            conn.execute(
+                "INSERT INTO mlr_review_queue VALUES (?, ?, ?, ?, 'PENDING', ?)",
+                (f"MLRQ_{uuid.uuid4().hex[:12].upper()}", principal.tenant_id, claim_id, candidate["market"], utc_now()),
             )
         conn.execute(
             "UPDATE candidate_claims SET status=? WHERE tenant_id=? AND candidate_id=?",
@@ -483,6 +533,101 @@ def record_sme_decision(
         "decision": request.decision,
         "claim_id": claim_id,
         "approval_status": "NOT_MLR_REVIEWED" if claim_id else None,
+        "audit_id": audit_id,
+    }
+
+
+@app.get("/v1/mlr/reviews")
+def list_mlr_reviews(
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> list[dict]:
+    if principal.role not in {"ROLE_MLR_REVIEWER", "ROLE_REGULATORY", "ROLE_LEGAL"}:
+        raise HTTPException(403, "An authorized MLR reviewer role is required")
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT q.review_id, q.claim_id, q.market, q.review_status,
+                      g.claim_text, g.claim_type, g.data_class, g.approval_status
+               FROM mlr_review_queue q JOIN governed_claims g
+                 ON g.claim_id=q.claim_id AND g.tenant_id=q.tenant_id
+               WHERE q.tenant_id=? AND q.review_status='PENDING'
+               ORDER BY q.created_at_utc""",
+            (principal.tenant_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/v1/mlr/reviews/{review_id}/decisions")
+def record_mlr_decision(
+    review_id: str,
+    request: MlrDecisionRequest,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    if principal.role not in {"ROLE_MLR_REVIEWER", "ROLE_REGULATORY", "ROLE_LEGAL"}:
+        raise HTTPException(403, "An authorized MLR reviewer role is required")
+    if request.decision in {"APPROVED", "APPROVED_WITH_CHANGES"} and not request.authorization_confirmed:
+        raise HTTPException(403, "Explicit MLR authorization confirmation is required")
+    if request.decision == "APPROVED_WITH_CHANGES" and not (request.approved_wording or "").strip():
+        raise HTTPException(422, "Approved wording is required for APPROVED_WITH_CHANGES")
+    if request.decision in {"APPROVED", "APPROVED_WITH_CHANGES"}:
+        if request.effective_from_utc is None or request.expires_at_utc is None:
+            raise HTTPException(422, "Effective and expiry timestamps are required for approval")
+        if request.expires_at_utc <= request.effective_from_utc:
+            raise HTTPException(422, "Expiry must be later than the effective timestamp")
+    with connection() as conn:
+        review = conn.execute(
+            "SELECT * FROM mlr_review_queue WHERE tenant_id=? AND review_id=?",
+            (principal.tenant_id, review_id),
+        ).fetchone()
+        if not review:
+            raise HTTPException(404, "MLR review not found")
+        if review["review_status"] != "PENDING":
+            raise HTTPException(409, "MLR review has already been decided")
+        decision_id = f"MLRD_{uuid.uuid4().hex[:12].upper()}"
+        effective = request.effective_from_utc.isoformat() if request.effective_from_utc else None
+        expires = request.expires_at_utc.isoformat() if request.expires_at_utc else None
+        conn.execute(
+            "INSERT INTO mlr_review_decisions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                decision_id, principal.tenant_id, review_id, review["claim_id"],
+                principal.actor_id, principal.role, request.decision, request.rationale,
+                request.approved_wording, request.conditions_of_use, effective, expires, utc_now(),
+            ),
+        )
+        approval_status = "MLR_REJECTED"
+        claim_status = "REJECTED"
+        if request.decision in {"APPROVED", "APPROVED_WITH_CHANGES"}:
+            approval_status = "MLR_APPROVED"
+            claim_status = "ACTIVE"
+            if request.decision == "APPROVED_WITH_CHANGES":
+                conn.execute(
+                    "UPDATE governed_claims SET claim_text=? WHERE tenant_id=? AND claim_id=?",
+                    (request.approved_wording.strip(), principal.tenant_id, review["claim_id"]),
+                )
+        conn.execute(
+            """UPDATE governed_claims SET approval_status=?, status=?, effective_from_utc=?,
+                      expires_at_utc=?, conditions_of_use=?
+               WHERE tenant_id=? AND claim_id=?""",
+            (
+                approval_status, claim_status, effective, expires, request.conditions_of_use,
+                principal.tenant_id, review["claim_id"],
+            ),
+        )
+        conn.execute(
+            "UPDATE mlr_review_queue SET review_status=? WHERE tenant_id=? AND review_id=?",
+            (request.decision, principal.tenant_id, review_id),
+        )
+        audit_id = append_audit(
+            conn, principal, "MLR_REVIEW_DECISION", review["claim_id"],
+            {"review_id": review_id, "decision_id": decision_id, "decision": request.decision, "approval_status": approval_status},
+        )
+    return {
+        "mlr_decision_id": decision_id,
+        "review_id": review_id,
+        "claim_id": review["claim_id"],
+        "decision": request.decision,
+        "approval_status": approval_status,
+        "effective_from_utc": effective,
+        "expires_at_utc": expires,
         "audit_id": audit_id,
     }
 
