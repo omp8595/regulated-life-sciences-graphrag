@@ -10,7 +10,7 @@ os.environ["PRODUCT_DB_PATH"] = str(Path(TEMP.name) / "test.db")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from product_api.app import app, connection  # noqa: E402
-from product_api.worker import process_ingestion_job  # noqa: E402
+from product_api.worker import process_ingestion_job, process_next_job  # noqa: E402
 
 
 class ProductApiTests(unittest.TestCase):
@@ -77,6 +77,9 @@ class ProductApiTests(unittest.TestCase):
         result = process_ingestion_job(response.json()["job_id"], "tenant_b")
         self.assertEqual(result["stage"], "SECURITY_REJECTED")
         self.assertEqual(result["chunks_created"], 0)
+
+    def test_empty_queue_returns_none(self):
+        self.assertIsNone(process_next_job())
 
 
 if __name__ == "__main__":
