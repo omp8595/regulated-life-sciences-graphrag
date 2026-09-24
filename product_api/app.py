@@ -73,6 +73,26 @@ def initialize_database() -> None:
                 created_at_utc TEXT NOT NULL,
                 updated_at_utc TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS document_chunks (
+                chunk_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                document_id TEXT NOT NULL REFERENCES documents(document_id),
+                chunk_sequence INTEGER NOT NULL,
+                page_number INTEGER,
+                chunk_text TEXT NOT NULL,
+                character_count INTEGER NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(tenant_id, document_id, chunk_sequence)
+            );
+            CREATE TABLE IF NOT EXISTS document_findings (
+                finding_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                document_id TEXT NOT NULL REFERENCES documents(document_id),
+                finding_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                finding_value TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS audit_events (
                 sequence_number INTEGER PRIMARY KEY AUTOINCREMENT,
                 audit_id TEXT UNIQUE NOT NULL,
@@ -89,6 +109,8 @@ def initialize_database() -> None:
                 ON documents(tenant_id, created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_jobs_tenant
                 ON ingestion_jobs(tenant_id, created_at_utc);
+            CREATE INDEX IF NOT EXISTS idx_chunks_tenant_document
+                ON document_chunks(tenant_id, document_id, chunk_sequence);
             CREATE INDEX IF NOT EXISTS idx_audit_tenant
                 ON audit_events(tenant_id, sequence_number);
             """
@@ -332,4 +354,3 @@ def verify_audit_chain(
             invalid.append(row["audit_id"])
         expected_previous = row["record_hash"]
     return {"valid": not invalid, "records": len(rows), "invalid_audit_ids": invalid}
-
