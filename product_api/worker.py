@@ -8,7 +8,13 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from product_api.app import TenantContext, append_audit, connection, utc_now
+from product_api.app import (
+    TenantContext,
+    append_audit,
+    connection,
+    initialize_database,
+    utc_now,
+)
 
 
 EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
@@ -85,6 +91,7 @@ def detect_findings(text: str) -> list[tuple[str, str, str]]:
 
 
 def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_worker") -> dict:
+    initialize_database()
     context = TenantContext(tenant_id=tenant_id, actor_id=actor_id, role="ROLE_SYSTEM_WORKER")
     with connection() as conn:
         job = conn.execute(
@@ -206,9 +213,9 @@ def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_w
 
 
 def process_next_job() -> dict | None:
+    initialize_database()
     with connection() as conn:
         job = conn.execute(
             "SELECT job_id, tenant_id FROM ingestion_jobs WHERE status='QUEUED' ORDER BY created_at_utc LIMIT 1"
         ).fetchone()
     return process_ingestion_job(job["job_id"], job["tenant_id"]) if job else None
-
