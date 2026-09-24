@@ -33,6 +33,10 @@ It never creates an SME-validated or MLR-approved claim automatically.
 
 ## Pharma semantic normalization
 
+The semantic registry is persisted as versioned platform master data in SQLite. The bootstrap data seeds concepts, aliases, typed relationships and authoritative external mappings idempotently. Ingestion and retrieval read the active database-backed master rather than Python constants.
+
+The authenticated `GET /v1/semantic/concepts` endpoint returns the current active catalog, aliases and external mappings.
+
 The ingestion worker resolves curated aliases to canonical concepts before graph
 indexing. Semantic nodes carry a stable canonical ID and concept type, while
 registry relationships create typed edges such as `BRAND_OF`, `EVALUATES`,
