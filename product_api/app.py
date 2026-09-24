@@ -114,6 +114,24 @@ def initialize_database() -> None:
                 created_at_utc TEXT NOT NULL,
                 UNIQUE(tenant_id, source_node_id, target_node_id, relationship_type)
             );
+            CREATE TABLE IF NOT EXISTS evidence_intelligence (
+                structure_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                document_id TEXT NOT NULL REFERENCES documents(document_id),
+                chunk_id TEXT NOT NULL REFERENCES document_chunks(chunk_id),
+                study_json TEXT NOT NULL,
+                population_json TEXT NOT NULL,
+                intervention_json TEXT NOT NULL,
+                comparator_json TEXT NOT NULL,
+                endpoint_json TEXT NOT NULL,
+                outcome_json TEXT NOT NULL,
+                safety_json TEXT NOT NULL,
+                semantic_relationships_json TEXT NOT NULL,
+                extraction_method TEXT NOT NULL,
+                review_status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(tenant_id, chunk_id)
+            );
             CREATE TABLE IF NOT EXISTS semantic_concepts (
                 concept_id TEXT NOT NULL,
                 version INTEGER NOT NULL,
@@ -293,6 +311,8 @@ def initialize_database() -> None:
                 ON ingestion_jobs(tenant_id, created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_chunks_tenant_document
                 ON document_chunks(tenant_id, document_id, chunk_sequence);
+            CREATE INDEX IF NOT EXISTS idx_evidence_intelligence_tenant_document
+                ON evidence_intelligence(tenant_id, document_id, chunk_id);
             CREATE INDEX IF NOT EXISTS idx_graph_nodes_tenant
                 ON graph_nodes(tenant_id, node_type, label);
             CREATE INDEX IF NOT EXISTS idx_graph_edges_tenant
@@ -749,6 +769,24 @@ def governed_query(
         {"audit_id": audit_id, "actor_id": principal.actor_id, "role": principal.role, "purpose": request.purpose}
     )
     return result
+
+
+@app.get("/v1/evidence/intelligence")
+def evidence_intelligence_catalog(
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+    document_id: str | None = None,
+) -> list[dict]:
+    if principal.role not in {
+        "ROLE_MEDICAL",
+        "ROLE_CLINICAL",
+        "ROLE_REGULATORY",
+        "ROLE_MLR_REVIEWER",
+    }:
+        raise HTTPException(403, "An authorized evidence-review role is required")
+    from product_api.evidence_intelligence import list_evidence_intelligence
+
+    with connection() as conn:
+        return list_evidence_intelligence(conn, principal.tenant_id, document_id)
 
 
 @app.get("/v1/sme/candidates")
