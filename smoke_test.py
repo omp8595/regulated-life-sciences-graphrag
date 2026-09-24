@@ -6,6 +6,8 @@ CASES = [
     ("Promotional publication blocked", "What is the ALPINE interim publication?", "ROLE_COMMERCIAL", "PROMOTIONAL_CONTENT", "United States", "BLOCKED"),
     ("Medical efficacy evidence", "How did zanubrutinib perform compared with ibrutinib?", "ROLE_MEDICAL", "MEDICAL_RESPONSE", "Global", "EVIDENCE_ONLY"),
     ("India dosage abstains", "What is the approved dosage in India?", "ROLE_COMMERCIAL", "INTERNAL_INSIGHT", "India", "ABSTAIN"),
+    ("Complex medical efficacy and safety", "How did zanubrutinib compare with ibrutinib regarding efficacy and cardiac safety?", "ROLE_MEDICAL", "MEDICAL_RESPONSE", "Global", "EVIDENCE_ONLY"),
+    ("Complex promotional request blocked", "Can ALPINE efficacy and cardiac safety findings support a superiority promotion?", "ROLE_COMMERCIAL", "PROMOTIONAL_CONTENT", "United States", "BLOCKED"),
 ]
 
 
