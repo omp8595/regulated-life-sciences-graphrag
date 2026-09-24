@@ -15,7 +15,7 @@ from product_api.app import (
     initialize_database,
     utc_now,
 )
-from product_api.semantic import relationships_for_concepts, resolve_mentions
+from product_api.semantic.store import relationships_for_concepts, resolve_mentions
 
 
 EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
@@ -127,7 +127,7 @@ def index_graph(conn: sqlite3.Connection, tenant_id: str, document: sqlite3.Row,
                 (f"EDG_{uuid.uuid4().hex[:12].upper()}", tenant_id, source, target, relationship, utc_now()),
             )
             edge_count += 1
-        resolved = resolve_mentions(chunk_text)
+        resolved = resolve_mentions(conn, chunk_text)
         entity_nodes: dict[str, str] = {}
         for mention in resolved:
             entity_node = _node(
@@ -147,15 +147,15 @@ def index_graph(conn: sqlite3.Connection, tenant_id: str, document: sqlite3.Row,
             )
             edge_count += 1
 
-        for relation in relationships_for_concepts(entity_nodes):
+        for relation in relationships_for_concepts(conn, entity_nodes):
             conn.execute(
                 "INSERT OR IGNORE INTO graph_edges VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     f"EDG_{uuid.uuid4().hex[:12].upper()}",
                     tenant_id,
-                    entity_nodes[relation.source_id],
-                    entity_nodes[relation.target_id],
-                    relation.relationship,
+                    entity_nodes[relation["source_id"]],
+                    entity_nodes[relation["target_id"]],
+                    relation["relationship"],
                     utc_now(),
                 ),
             )
