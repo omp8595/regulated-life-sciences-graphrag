@@ -19,13 +19,13 @@ Source documents
 
 ## Capabilities
 
-- Hybrid semantic, lexical and graph retrieval
-- Multi-hop GraphRAG with source, document, page and chunk lineage
-- Role-, purpose-, market- and data-class-aware access controls
-- Governed answers, evidence discovery, policy blocks and abstention
-- SME candidate review and controlled MLR workflow artifacts
+- Hybrid lexical retrieval and graph traversal
+- Multi-hop GraphRAG with source, document, page, and chunk lineage
+- Role-, purpose-, market-, and data-class-aware access controls
+- Governed answers, evidence discovery, policy blocks, and abstention
+- SME candidate review and MLR workflow artifacts
 - Hash-linked audit records
-- SQLite, GraphML, CSV and packaged runtime artifacts
+- SQLite, GraphML, CSV, and packaged runtime artifacts
 
 ## Validation
 
@@ -39,13 +39,25 @@ Source documents
 
 ## Repository structure
 
-- `platform_artifacts/` — database, graph, retrieval index, policies, audit logs, test results and source documents
+- `app.py` — runnable governed GraphRAG Gradio interface
+- `smoke_test.py` — deterministic role, purpose and market smoke tests
+- `platform_artifacts/` — database, graph, retrieval index, policies, audit logs, test results, and source documents
 - `release/` — complete downloadable ZIP archive
 - `requirements.txt` — Python dependencies for rebuilding the prototype
 
+## Run locally or in Kaggle
+
+```bash
+pip install -r requirements.txt
+python smoke_test.py
+GRADIO_SHARE=true python app.py
+```
+
+The smoke suite verifies governed US dosage, promotional blocking, medical evidence discovery and India-market abstention.
+
 ## Important notice
 
-This is a technical prototype, not a validated production GxP system. It must not be used for patient care, clinical decisions, regulatory submissions or promotional approval. SME and MLR decisions must be made only by genuinely authorized reviewers.
+This is a technical prototype, not a validated production GxP system. It must not be used for patient care, clinical decisions, regulatory submissions, or promotional approval. SME and MLR decisions must be made only by genuinely authorized reviewers.
 
 ## Author
 
