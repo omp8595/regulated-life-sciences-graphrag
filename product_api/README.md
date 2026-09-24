@@ -62,3 +62,12 @@ Provision `/v1/auth/api-keys` with `X-Platform-Admin-Key`, then call `/v1/query`
 with the returned key as `Authorization: Bearer <key>`. The key is stored only as
 a SHA-256 hash, its tenant and role cannot be overridden by the query body, and
 each query decision is written to the hash-linked audit chain.
+
+## SME validation
+
+Authorized `ROLE_MEDICAL`, `ROLE_CLINICAL`, and `ROLE_REGULATORY` principals can
+review pending candidates through `/v1/sme/candidates`. Validation requires an
+explicit authorization confirmation and a substantive rationale. A validated
+candidate becomes a versioned governed claim linked to its source chunk, while
+its approval state remains `NOT_MLR_REVIEWED`. SME validation never implies
+promotional approval.
