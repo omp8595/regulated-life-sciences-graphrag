@@ -1,4 +1,4 @@
-# Product API — Sprint 1
+# Product API — Semantic Layer v1
 
 This service introduces tenant-isolated document ingestion and hash-linked audit events.
 
@@ -30,6 +30,19 @@ print(process_next_job())
 The worker validates the file, extracts text, detects sensitive data and prompt
 injection, creates tenant-scoped chunks, and finishes at `READY_FOR_SME_REVIEW`.
 It never creates an SME-validated or MLR-approved claim automatically.
+
+## Pharma semantic normalization
+
+The ingestion worker resolves curated aliases to canonical concepts before graph
+indexing. Semantic nodes carry a stable canonical ID and concept type, while
+registry relationships create typed edges such as `BRAND_OF`, `EVALUATES`,
+`COMPARES_WITH`, `STUDIES_INDICATION`, and `TARGETS`.
+
+Retrieval combines lexical similarity with direct canonical-concept overlap and
+one-hop semantic expansion. This means a governed query for `BRUKINSA` can
+discover permitted evidence that uses the molecule name `zanubrutinib` even
+when the literal brand name is absent. The semantic registry is deterministic
+and curated; it does not create regulatory or promotional claims.
 
 ## Tenant-scoped hybrid retrieval
 
