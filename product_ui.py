@@ -76,6 +76,159 @@ def run_query(api_key, question, purpose, market, top_k):
     )
 
 
+def _semantic_relationship_lines(result: dict) -> list[str]:
+    query_labels = set(result.get("resolved_entities") or [])
+    related_labels = set()
+    for item in (result.get("governed_claims") or []) + (result.get("results") or []):
+        related_labels.update(item.get("semantic_related_matches") or [])
+        related_labels.update(item.get("semantic_direct_matches") or [])
+
+    if not query_labels or not related_labels:
+        return []
+
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT s.canonical_name AS source_name,
+                      r.relationship_type,
+                      t.canonical_name AS target_name
+               FROM semantic_relationships r
+               JOIN semantic_concepts s
+                 ON s.concept_id=r.source_concept_id AND s.version=r.source_version
+               JOIN semantic_concepts t
+                 ON t.concept_id=r.target_concept_id AND t.version=r.target_version
+               WHERE r.status='ACTIVE'"""
+        ).fetchall()
+
+    lines = []
+    for row in rows:
+        source = row["source_name"]
+        target = row["target_name"]
+        if (source in query_labels and target in related_labels) or (
+            target in query_labels and source in related_labels
+        ):
+            lines.append(f"{source} —{row['relationship_type']}→ {target}")
+    return sorted(set(lines))
+
+
+def _workspace_summary(result: dict, question: str) -> str:
+    status = result.get("status", "UNKNOWN")
+    response_type = result.get("response_type", "UNKNOWN")
+    role = result.get("role", "UNKNOWN")
+    purpose = result.get("purpose", "UNKNOWN")
+    market = result.get("market", "UNKNOWN")
+    governance_message = result.get("governance_message", "")
+    audit_id = result.get("audit_id", "")
+    entities = result.get("resolved_entities") or []
+    relationships = _semantic_relationship_lines(result)
+
+    if status == "ANSWERED":
+        answer = result.get("answer", "No answer text returned.")
+        state = "✅ Governed answer"
+    elif status == "EVIDENCE_ONLY":
+        answer = (
+            "Relevant permitted evidence was found, but it has not yet been promoted "
+            "to an SME-validated governed claim. Review the evidence below."
+        )
+        state = "🟡 Evidence discovery"
+    elif status == "BLOCKED":
+        answer = "The platform found relevant evidence but policy does not permit its use for this request."
+        state = "⛔ Policy blocked"
+    else:
+        answer = "The platform abstained because no authoritative permitted evidence supported this request."
+        state = "⚪ Abstained"
+
+    entity_text = ", ".join(entities) if entities else "No canonical entities resolved"
+    relationship_text = (
+        "\n".join(f"- {line}" for line in relationships)
+        if relationships
+        else "- No explicit semantic relationship was required for this result."
+    )
+
+    return f"""### {state}
+
+**Question:** {question}
+
+**Answer / decision**
+
+{answer}
+
+**Governance context**
+- Response type: {response_type}
+- Role: {role}
+- Purpose: {purpose}
+- Market: {market}
+- Policy explanation: {governance_message}
+- Audit ID: {audit_id}
+
+**Canonical entities:** {entity_text}
+
+**Semantic path**
+{relationship_text}
+"""
+
+
+def _workspace_evidence_rows(result: dict) -> list[list]:
+    rows = []
+    if result.get("status") == "ANSWERED":
+        for claim in result.get("governed_claims") or []:
+            rows.append(
+                [
+                    "Governed claim",
+                    claim.get("claim_text", ""),
+                    claim.get("file_name", ""),
+                    claim.get("approval_status", ""),
+                    claim.get("usage_condition", ""),
+                    claim.get("score", 0),
+                    ", ".join(claim.get("semantic_direct_matches") or []),
+                    ", ".join(claim.get("semantic_related_matches") or []),
+                ]
+            )
+    else:
+        for item in result.get("results") or []:
+            rows.append(
+                [
+                    "Evidence",
+                    item.get("text", ""),
+                    item.get("file_name", ""),
+                    "NOT_SME_VALIDATED",
+                    item.get("usage_condition", ""),
+                    item.get("hybrid_score", 0),
+                    ", ".join(item.get("semantic_direct_matches") or []),
+                    ", ".join(item.get("semantic_related_matches") or []),
+                ]
+            )
+    return rows
+
+
+def _workspace_provenance_rows(result: dict) -> list[list]:
+    rows = []
+    source_items = result.get("governed_claims") or result.get("results") or []
+    for item in source_items:
+        rows.append(
+            [
+                item.get("file_name", ""),
+                item.get("document_id", ""),
+                item.get("chunk_id", ""),
+                item.get("page_number", ""),
+                item.get("market", result.get("market", "")),
+                item.get("data_class", ""),
+                item.get("approval_status", "EVIDENCE_ONLY"),
+                item.get("usage_condition", ""),
+            ]
+        )
+    return rows
+
+
+def run_query_workspace(api_key, question, purpose, market, top_k):
+    result = run_query(api_key, question, purpose, market, top_k)
+    return (
+        _workspace_summary(result, question),
+        _workspace_evidence_rows(result),
+        _workspace_provenance_rows(result),
+        result,
+    )
+
+
 def refresh_sme(api_key):
     candidates = _result(_client().get("/v1/sme/candidates", headers=_bearer(api_key)))
     choices = [candidate["candidate_id"] for candidate in candidates]
@@ -229,6 +382,7 @@ def governance_status(api_key):
 CSS = """
 .hero {background: linear-gradient(120deg,#10243e,#173f5f); padding:24px; border-radius:16px; color:white;}
 .notice {border-left:5px solid #ff7518; padding:12px 16px; background:#fff8ef;}
+.gradio-container {max-width: 1500px !important;}
 """
 
 
@@ -252,15 +406,69 @@ def build_ui():
             ingest_output = gr.JSON(label="Ingestion result")
             ingest_button.click(upload_and_process, [api_key, source, market, data_class, sensitivity], ingest_output)
 
-        with gr.Tab("Governed query"):
-            question = gr.Textbox(label="Question", lines=3)
+        with gr.Tab("Medical Evidence Workspace"):
+            gr.Markdown(
+                "Ask a medical or regulatory question and review the governed answer, "
+                "semantic reasoning path, evidence, provenance and policy state in one place."
+            )
+            question = gr.Textbox(
+                label="Question",
+                lines=3,
+                placeholder="e.g. What evidence supports BRUKINSA in relapsed/refractory CLL?",
+            )
             with gr.Row():
-                purpose = gr.Dropdown(["MEDICAL_RESPONSE", "INTERNAL_INSIGHT", "PROMOTIONAL_CONTENT", "CLINICAL_ANALYSIS", "REGULATORY_ANALYSIS"], value="MEDICAL_RESPONSE", label="Purpose")
-                query_market = gr.Dropdown(["Global", "United States", "India", "China", "European Union"], value="Global", label="Market")
+                purpose = gr.Dropdown(
+                    ["MEDICAL_RESPONSE", "INTERNAL_INSIGHT", "PROMOTIONAL_CONTENT", "CLINICAL_ANALYSIS", "REGULATORY_ANALYSIS"],
+                    value="MEDICAL_RESPONSE",
+                    label="Purpose",
+                )
+                query_market = gr.Dropdown(
+                    ["Global", "United States", "India", "China", "European Union"],
+                    value="Global",
+                    label="Market",
+                )
                 top_k = gr.Slider(1, 10, value=3, step=1, label="Evidence results")
             query_button = gr.Button("Ask governed platform", variant="primary")
-            query_output = gr.JSON(label="Decision, answer and evidence")
-            query_button.click(run_query, [api_key, question, purpose, query_market, top_k], query_output)
+            query_summary = gr.Markdown(label="Governed response")
+            query_evidence = gr.Dataframe(
+                headers=[
+                    "Type",
+                    "Evidence / governed claim",
+                    "Source file",
+                    "Approval state",
+                    "Usage condition",
+                    "Relevance",
+                    "Direct semantic matches",
+                    "Related semantic matches",
+                ],
+                datatype=["str", "str", "str", "str", "str", "number", "str", "str"],
+                interactive=False,
+                wrap=True,
+                label="Evidence and governance",
+            )
+            query_provenance = gr.Dataframe(
+                headers=[
+                    "Source file",
+                    "Document ID",
+                    "Chunk ID",
+                    "Page",
+                    "Market",
+                    "Data class",
+                    "Approval state",
+                    "Usage condition",
+                ],
+                datatype=["str", "str", "str", "str", "str", "str", "str", "str"],
+                interactive=False,
+                wrap=True,
+                label="Provenance and lineage",
+            )
+            with gr.Accordion("Raw decision payload", open=False):
+                query_output = gr.JSON(label="Raw API response")
+            query_button.click(
+                run_query_workspace,
+                [api_key, question, purpose, query_market, top_k],
+                [query_summary, query_evidence, query_provenance, query_output],
+            )
 
         with gr.Tab("SME validation"):
             refresh_sme_button = gr.Button("Refresh pending candidates")
