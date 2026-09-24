@@ -161,7 +161,7 @@ CSS = """
 
 
 def build_ui():
-    with gr.Blocks(title="Governed Life Sciences GraphRAG") as demo:
+    with gr.Blocks(title="Governed Life Sciences GraphRAG", css=CSS) as demo:
         gr.HTML("""<div class='hero'><h1>Governed Life Sciences GraphRAG</h1>
         <p>Multi-tenant evidence ingestion, governed retrieval, SME validation, MLR approval and audit.</p></div>""")
         gr.HTML("<div class='notice'><b>Prototype notice:</b> Do not validate or approve unless you are a genuinely authorized reviewer.</div>")
@@ -233,6 +233,4 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=int(os.getenv("PORT", "7860")),
         share=os.getenv("GRADIO_SHARE", "false").lower() == "true",
-        css=CSS,
     )
-
