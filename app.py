@@ -10,6 +10,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 
 ROOT = Path(__file__).resolve().parent
@@ -19,7 +20,37 @@ CLAIMS = pd.read_csv(ARTIFACTS / "claims.csv")
 CLAIM_EVIDENCE = pd.read_csv(ARTIFACTS / "claim_evidence.csv")
 EVIDENCE = pd.read_csv(ARTIFACTS / "evidence_sources.csv")
 POLICIES = pd.read_csv(ARTIFACTS / "purpose_access_policies.csv")
-INDEX = joblib.load(ARTIFACTS / "document_retrieval_index.joblib")
+
+
+def load_or_build_index() -> dict:
+    """Load the packaged index, rebuilding it from governed chunks if needed."""
+    index_path = ARTIFACTS / "document_retrieval_index.joblib"
+    try:
+        loaded = joblib.load(index_path)
+        required = {"word_vectorizer", "word_matrix", "character_vectorizer", "character_matrix", "chunks"}
+        if required.issubset(loaded):
+            return loaded
+    except Exception as exc:
+        print(f"Packaged retrieval index unavailable ({type(exc).__name__}); rebuilding from document_chunks.csv.")
+
+    chunks = pd.read_csv(ARTIFACTS / "document_chunks.csv")
+    text = chunks["chunk_text"].fillna("").astype(str)
+    word_vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), min_df=1)
+    character_vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=1)
+    return {
+        "word_vectorizer": word_vectorizer,
+        "word_matrix": word_vectorizer.fit_transform(text),
+        "character_vectorizer": character_vectorizer,
+        "character_matrix": character_vectorizer.fit_transform(text),
+        "chunks": chunks,
+        "word_weight": 0.65,
+        "character_weight": 0.35,
+        "index_type": "RUNTIME_REBUILT_TFIDF",
+        "chunk_count": len(chunks),
+    }
+
+
+INDEX = load_or_build_index()
 
 INTENT_RULES = {
     "DOSAGE": ("dose", "dosage", "mg", "take each day"),
