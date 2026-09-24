@@ -167,6 +167,33 @@ def initialize_database() -> None:
                     REFERENCES semantic_concepts(concept_id, version),
                 UNIQUE(system, identifier, concept_id, concept_version)
             );
+            CREATE TABLE IF NOT EXISTS semantic_change_requests (
+                change_request_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                change_type TEXT NOT NULL,
+                concept_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                status TEXT NOT NULL,
+                proposed_by TEXT NOT NULL,
+                proposed_role TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                decided_by TEXT,
+                decided_role TEXT,
+                decision_rationale TEXT,
+                decided_at_utc TEXT,
+                applied_concept_version INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS semantic_change_decisions (
+                decision_id TEXT PRIMARY KEY,
+                change_request_id TEXT NOT NULL REFERENCES semantic_change_requests(change_request_id),
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                reviewer_actor_id TEXT NOT NULL,
+                reviewer_role TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS audit_events (
                 sequence_number INTEGER PRIMARY KEY AUTOINCREMENT,
                 audit_id TEXT UNIQUE NOT NULL,
@@ -278,6 +305,10 @@ def initialize_database() -> None:
                 ON semantic_relationships(source_concept_id, target_concept_id, status);
             CREATE INDEX IF NOT EXISTS idx_semantic_external_mapping
                 ON semantic_external_mappings(system, identifier, status);
+            CREATE INDEX IF NOT EXISTS idx_semantic_changes_tenant_status
+                ON semantic_change_requests(tenant_id, status, created_at_utc);
+            CREATE INDEX IF NOT EXISTS idx_semantic_decisions_request
+                ON semantic_change_decisions(change_request_id, created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_audit_tenant
                 ON audit_events(tenant_id, sequence_number);
             CREATE INDEX IF NOT EXISTS idx_principals_tenant
@@ -381,6 +412,19 @@ class QueryRequest(BaseModel):
     purpose: str = Field(min_length=2, max_length=100)
     market: str = Field(min_length=2, max_length=100)
     top_k: int = Field(default=5, ge=1, le=20)
+
+
+class SemanticChangeRequest(BaseModel):
+    change_type: str = Field(pattern=r"^(ADD_ALIAS|ADD_EXTERNAL_MAPPING|UPDATE_CONCEPT)$")
+    concept_id: str = Field(min_length=3, max_length=160)
+    payload: dict
+    rationale: str = Field(min_length=20, max_length=4000)
+
+
+class SemanticChangeDecisionRequest(BaseModel):
+    decision: str = Field(pattern=r"^(APPROVED|REJECTED)$")
+    rationale: str = Field(min_length=20, max_length=4000)
+    authorization_confirmed: bool
 
 
 class SmeDecisionRequest(BaseModel):
@@ -490,6 +534,185 @@ def semantic_concepts(
     with connection() as conn:
         concepts = list_semantic_concepts(conn)
     return concepts
+
+
+@app.post("/v1/semantic/change-requests", status_code=201)
+def propose_semantic_change(
+    request: SemanticChangeRequest,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    from product_api.semantic.store import validate_semantic_change
+
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_REGULATORY", "ROLE_SEMANTIC_STEWARD"}:
+        raise HTTPException(403, "An authorized semantic contributor role is required")
+
+    change_request_id = f"SEMCR_{uuid.uuid4().hex[:12].upper()}"
+    with connection() as conn:
+        try:
+            validate_semantic_change(conn, request.change_type, request.concept_id, request.payload)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+        conn.execute(
+            """INSERT INTO semantic_change_requests
+               (change_request_id, tenant_id, change_type, concept_id, payload_json,
+                rationale, status, proposed_by, proposed_role, created_at_utc)
+               VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)""",
+            (
+                change_request_id,
+                principal.tenant_id,
+                request.change_type,
+                request.concept_id,
+                json.dumps(request.payload, sort_keys=True),
+                request.rationale,
+                principal.actor_id,
+                principal.role,
+                utc_now(),
+            ),
+        )
+        audit_id = append_audit(
+            conn,
+            principal,
+            "SEMANTIC_CHANGE_PROPOSED",
+            change_request_id,
+            {
+                "change_type": request.change_type,
+                "concept_id": request.concept_id,
+            },
+        )
+    return {
+        "change_request_id": change_request_id,
+        "status": "PENDING",
+        "change_type": request.change_type,
+        "concept_id": request.concept_id,
+        "audit_id": audit_id,
+    }
+
+
+@app.get("/v1/semantic/change-requests")
+def list_semantic_change_requests(
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> list[dict]:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_REGULATORY", "ROLE_SEMANTIC_STEWARD"}:
+        raise HTTPException(403, "An authorized semantic governance role is required")
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT change_request_id, change_type, concept_id, payload_json,
+                      rationale, status, proposed_by, proposed_role, created_at_utc,
+                      decided_by, decided_role, decision_rationale, decided_at_utc,
+                      applied_concept_version
+               FROM semantic_change_requests
+               WHERE tenant_id=?
+               ORDER BY created_at_utc DESC""",
+            (principal.tenant_id,),
+        ).fetchall()
+    return [
+        {
+            **{key: row[key] for key in row.keys() if key != "payload_json"},
+            "payload": json.loads(row["payload_json"]),
+        }
+        for row in rows
+    ]
+
+
+@app.post("/v1/semantic/change-requests/{change_request_id}/decisions")
+def decide_semantic_change(
+    change_request_id: str,
+    request: SemanticChangeDecisionRequest,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    from product_api.semantic.store import apply_semantic_change
+
+    if principal.role not in {"ROLE_REGULATORY", "ROLE_SEMANTIC_STEWARD"}:
+        raise HTTPException(403, "An authorized semantic reviewer role is required")
+    if request.decision == "APPROVED" and not request.authorization_confirmed:
+        raise HTTPException(403, "Explicit semantic-governance authorization confirmation is required")
+
+    with connection() as conn:
+        change = conn.execute(
+            """SELECT * FROM semantic_change_requests
+               WHERE tenant_id=? AND change_request_id=?""",
+            (principal.tenant_id, change_request_id),
+        ).fetchone()
+        if not change:
+            raise HTTPException(404, "Semantic change request not found")
+        if change["status"] != "PENDING":
+            raise HTTPException(409, "Semantic change request has already been decided")
+        if change["proposed_by"] == principal.actor_id:
+            raise HTTPException(403, "Semantic changes require independent reviewer approval")
+
+        applied_version = None
+        if request.decision == "APPROVED":
+            try:
+                applied_version = apply_semantic_change(
+                    conn,
+                    change["change_type"],
+                    change["concept_id"],
+                    json.loads(change["payload_json"]),
+                    utc_now(),
+                )
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            except (sqlite3.IntegrityError, TypeError, ValueError) as exc:
+                raise HTTPException(422, str(exc)) from exc
+
+        decision_id = f"SEMDEC_{uuid.uuid4().hex[:12].upper()}"
+        decided_at = utc_now()
+        conn.execute(
+            """INSERT INTO semantic_change_decisions
+               (decision_id, change_request_id, tenant_id, reviewer_actor_id,
+                reviewer_role, decision, rationale, created_at_utc)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                decision_id,
+                change_request_id,
+                principal.tenant_id,
+                principal.actor_id,
+                principal.role,
+                request.decision,
+                request.rationale,
+                decided_at,
+            ),
+        )
+        conn.execute(
+            """UPDATE semantic_change_requests
+               SET status=?, decided_by=?, decided_role=?, decision_rationale=?,
+                   decided_at_utc=?, applied_concept_version=?
+               WHERE change_request_id=? AND tenant_id=?""",
+            (
+                request.decision,
+                principal.actor_id,
+                principal.role,
+                request.rationale,
+                decided_at,
+                applied_version,
+                change_request_id,
+                principal.tenant_id,
+            ),
+        )
+        audit_id = append_audit(
+            conn,
+            principal,
+            "SEMANTIC_CHANGE_DECIDED",
+            change_request_id,
+            {
+                "decision": request.decision,
+                "decision_id": decision_id,
+                "concept_id": change["concept_id"],
+                "applied_concept_version": applied_version,
+            },
+        )
+
+    return {
+        "decision_id": decision_id,
+        "change_request_id": change_request_id,
+        "decision": request.decision,
+        "concept_id": change["concept_id"],
+        "applied_concept_version": applied_version,
+        "audit_id": audit_id,
+    }
 
 
 @app.post("/v1/query")
