@@ -442,7 +442,12 @@ class ProductApiTests(unittest.TestCase):
         )
 
     def test_medical_evidence_workspace_formats_semantics_governance_and_lineage(self):
-        from product_ui import _workspace_evidence_rows, _workspace_provenance_rows, _workspace_summary
+        from product_ui import (
+            _workspace_evidence_rows,
+            _workspace_provenance_rows,
+            _workspace_scientific_rows,
+            _workspace_summary,
+        )
 
         result = {
             "status": "EVIDENCE_ONLY",
@@ -466,6 +471,23 @@ class ProductApiTests(unittest.TestCase):
                     "hybrid_score": 0.175,
                     "semantic_direct_matches": [],
                     "semantic_related_matches": ["zanubrutinib"],
+                    "evidence_intelligence": {
+                        "study": ["ALPINE"],
+                        "population": {
+                            "indications": ["chronic lymphocytic leukemia"],
+                            "context": ["patients with relapsed or refractory CLL"],
+                        },
+                        "intervention": {
+                            "interventions": ["zanubrutinib"],
+                            "unclassified_treatments": [],
+                        },
+                        "comparator": ["ibrutinib"],
+                        "endpoint": ["PFS"],
+                        "outcome": ["PFS was 78% versus 66% at 24 months."],
+                        "safety": ["Atrial fibrillation occurred in 5% versus 13%."],
+                        "review_status": "UNVALIDATED_EXTRACTION",
+                        "extraction_method": "DETERMINISTIC_EVIDENCE_V1",
+                    },
                 }
             ],
         }
@@ -480,6 +502,13 @@ class ProductApiTests(unittest.TestCase):
         self.assertEqual(evidence[0][0], "Evidence")
         self.assertEqual(evidence[0][3], "NOT_SME_VALIDATED")
         self.assertEqual(evidence[0][7], "zanubrutinib")
+
+        scientific = _workspace_scientific_rows(result)
+        self.assertEqual(scientific[0][0], "ALPINE")
+        self.assertEqual(scientific[0][3], "zanubrutinib")
+        self.assertEqual(scientific[0][4], "ibrutinib")
+        self.assertEqual(scientific[0][5], "PFS")
+        self.assertEqual(scientific[0][8], "UNVALIDATED_EXTRACTION")
 
         provenance = _workspace_provenance_rows(result)
         self.assertEqual(provenance[0][0], "alpine.txt")
