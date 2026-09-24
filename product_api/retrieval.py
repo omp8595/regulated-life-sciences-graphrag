@@ -51,6 +51,60 @@ def hybrid_search(
     query_tokens = Counter(tokens(question))
     anchors = detected_entities(question)
     with connection() as conn:
+        claim_rows = conn.execute(
+            """SELECT g.*, e.document_id, e.chunk_id, d.file_name
+               FROM governed_claims g
+               JOIN governed_claim_evidence e
+                 ON e.claim_id=g.claim_id AND e.tenant_id=g.tenant_id
+               JOIN documents d
+                 ON d.document_id=e.document_id AND d.tenant_id=e.tenant_id
+               WHERE g.tenant_id=? AND g.status='ACTIVE'
+                 AND (g.market=? OR g.market='Global')""",
+            (tenant_id, market),
+        ).fetchall()
+        governed_matches = []
+        governed_blocked = []
+        for claim in claim_rows:
+            decision, condition = policy_decision(role, purpose, claim["data_class"])
+            if purpose == "PROMOTIONAL_CONTENT" and claim["approval_status"] != "MLR_APPROVED":
+                governed_blocked.append("MLR_APPROVAL_REQUIRED")
+                continue
+            if decision != "ALLOW":
+                governed_blocked.append(condition)
+                continue
+            score = cosine(query_tokens, Counter(tokens(claim["claim_text"])))
+            if score > 0:
+                governed_matches.append(
+                    {
+                        "claim_id": claim["claim_id"],
+                        "claim_text": claim["claim_text"],
+                        "claim_type": claim["claim_type"],
+                        "version": claim["version"],
+                        "market": claim["market"],
+                        "approval_status": claim["approval_status"],
+                        "document_id": claim["document_id"],
+                        "chunk_id": claim["chunk_id"],
+                        "file_name": claim["file_name"],
+                        "score": round(score, 4),
+                        "usage_condition": condition,
+                    }
+                )
+        governed_matches.sort(key=lambda item: item["score"], reverse=True)
+        if governed_matches:
+            claims = governed_matches[: max(1, min(top_k, 20))]
+            return {
+                "status": "ANSWERED",
+                "response_type": "GOVERNED_ANSWER",
+                "tenant_id": tenant_id,
+                "market": market,
+                "resolved_entities": anchors,
+                "answer": " ".join(claim["claim_text"] for claim in claims),
+                "governed_claims": claims,
+                "result_count": len(claims),
+                "results": [],
+                "governance_message": "The response is supported by SME-validated governed claims.",
+            }
+
         rows = conn.execute(
             """SELECT c.chunk_id, c.chunk_text, c.page_number, c.chunk_sequence,
                       d.document_id, d.file_name, d.market, d.data_class,
@@ -64,7 +118,7 @@ def hybrid_search(
         ).fetchall()
 
         allowed = []
-        blocked_conditions = []
+        blocked_conditions = list(governed_blocked)
         for row in rows:
             decision, condition = policy_decision(role, purpose, row["data_class"])
             if decision != "ALLOW":
@@ -125,4 +179,3 @@ def hybrid_search(
         "results": [],
         "governance_message": "No authoritative permitted evidence supports this request.",
     }
-
