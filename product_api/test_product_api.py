@@ -21,7 +21,9 @@ class ProductApiTests(unittest.TestCase):
         self.client.__enter__()
         with connection() as conn:
             for table in (
-                "graph_edges", "graph_nodes", "document_findings", "document_chunks", "audit_events", "api_principals",
+                "governed_claim_evidence", "governed_claims", "sme_review_decisions",
+                "candidate_claims", "graph_edges", "graph_nodes", "document_findings",
+                "document_chunks", "audit_events", "api_principals",
                 "ingestion_jobs", "documents", "tenants",
             ):
                 conn.execute(f"DELETE FROM {table}")
@@ -113,6 +115,43 @@ class ProductApiTests(unittest.TestCase):
             json={"question": "What efficacy was reported?", "purpose": "MEDICAL_RESPONSE", "market": "Global"},
         )
         self.assertEqual(unauthorized.status_code, 401)
+
+    def test_authorized_sme_promotes_candidate_without_mlr_approval(self):
+        upload = self.client.post(
+            "/v1/documents",
+            headers=self.headers("tenant_a"),
+            files={"file": ("validated.txt", b"ALPINE evaluated zanubrutinib and ibrutinib in CLL.", "text/plain")},
+            data={"market": "Global", "data_class": "MEDICAL_SCIENTIFIC_EVIDENCE", "sensitivity": "MEDICAL_ONLY"},
+        ).json()
+        process_ingestion_job(upload["job_id"], "tenant_a")
+        issued = self.client.post(
+            "/v1/auth/api-keys",
+            headers={"X-Platform-Admin-Key": "test-platform-admin-key"},
+            json={"tenant_id": "tenant_a", "actor_id": "authorized_sme", "role": "ROLE_MEDICAL"},
+        ).json()
+        auth = {"Authorization": f"Bearer {issued['api_key']}"}
+        candidates = self.client.get("/v1/sme/candidates", headers=auth).json()
+        self.assertEqual(len(candidates), 1)
+        rejected_confirmation = self.client.post(
+            f"/v1/sme/candidates/{candidates[0]['candidate_id']}/decisions",
+            headers=auth,
+            json={"decision": "VALIDATED", "rationale": "Evidence was checked against the supplied source passage.", "authorization_confirmed": False},
+        )
+        self.assertEqual(rejected_confirmation.status_code, 403)
+        decision = self.client.post(
+            f"/v1/sme/candidates/{candidates[0]['candidate_id']}/decisions",
+            headers=auth,
+            json={"decision": "VALIDATED", "rationale": "Evidence was checked against the supplied source passage.", "authorization_confirmed": True},
+        )
+        self.assertEqual(decision.status_code, 200)
+        self.assertEqual(decision.json()["approval_status"], "NOT_MLR_REVIEWED")
+        query = self.client.post(
+            "/v1/query", headers=auth,
+            json={"question": "What did ALPINE evaluate?", "purpose": "MEDICAL_RESPONSE", "market": "Global"},
+        ).json()
+        self.assertEqual(query["status"], "ANSWERED")
+        self.assertEqual(query["response_type"], "GOVERNED_ANSWER")
+        self.assertEqual(query["governed_claims"][0]["approval_status"], "NOT_MLR_REVIEWED")
 
     def test_hybrid_retrieval_is_tenant_market_and_policy_scoped(self):
         response = self.client.post(
