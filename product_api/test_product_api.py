@@ -23,6 +23,7 @@ class ProductApiTests(unittest.TestCase):
         self.client.__enter__()
         with connection() as conn:
             for table in (
+                "semantic_change_decisions", "semantic_change_requests",
                 "mlr_review_decisions", "mlr_review_queue", "governed_claim_evidence",
                 "governed_claims", "sme_review_decisions",
                 "candidate_claims", "graph_edges", "graph_nodes", "document_findings",
@@ -257,6 +258,92 @@ class ProductApiTests(unittest.TestCase):
         concept_ids = {concept["concept_id"] for concept in response.json()}
         self.assertIn("DRUG:ZANUBRUTINIB", concept_ids)
         self.assertIn("TRIAL:ALPINE", concept_ids)
+
+    def test_semantic_governance_approval_versions_master_and_blocks_self_approval(self):
+        proposer_key = self.client.post(
+            "/v1/auth/api-keys",
+            headers={"X-Platform-Admin-Key": "test-platform-admin-key"},
+            json={"tenant_id": "tenant_a", "actor_id": "semantic_author", "role": "ROLE_SEMANTIC_STEWARD"},
+        ).json()["api_key"]
+        proposer_auth = {"Authorization": f"Bearer {proposer_key}"}
+
+        proposed = self.client.post(
+            "/v1/semantic/change-requests",
+            headers=proposer_auth,
+            json={
+                "change_type": "ADD_ALIAS",
+                "concept_id": "BRAND:BRUKINSA",
+                "payload": {
+                    "alias": "Brukinsa product",
+                    "source": "ENTERPRISE_MASTER",
+                    "confidence": 0.95,
+                },
+                "rationale": "Add an enterprise-approved search alias for controlled semantic retrieval.",
+            },
+        )
+        self.assertEqual(proposed.status_code, 201)
+        change_request_id = proposed.json()["change_request_id"]
+        self.assertEqual(proposed.json()["status"], "PENDING")
+
+        self_review = self.client.post(
+            f"/v1/semantic/change-requests/{change_request_id}/decisions",
+            headers=proposer_auth,
+            json={
+                "decision": "APPROVED",
+                "rationale": "I reviewed the requested alias and approve this semantic master update.",
+                "authorization_confirmed": True,
+            },
+        )
+        self.assertEqual(self_review.status_code, 403)
+
+        reviewer_key = self.client.post(
+            "/v1/auth/api-keys",
+            headers={"X-Platform-Admin-Key": "test-platform-admin-key"},
+            json={"tenant_id": "tenant_a", "actor_id": "semantic_reviewer", "role": "ROLE_REGULATORY"},
+        ).json()["api_key"]
+        reviewer_auth = {"Authorization": f"Bearer {reviewer_key}"}
+
+        missing_confirmation = self.client.post(
+            f"/v1/semantic/change-requests/{change_request_id}/decisions",
+            headers=reviewer_auth,
+            json={
+                "decision": "APPROVED",
+                "rationale": "The alias is appropriate for the governed semantic master and has been reviewed.",
+                "authorization_confirmed": False,
+            },
+        )
+        self.assertEqual(missing_confirmation.status_code, 403)
+
+        approved = self.client.post(
+            f"/v1/semantic/change-requests/{change_request_id}/decisions",
+            headers=reviewer_auth,
+            json={
+                "decision": "APPROVED",
+                "rationale": "The alias is appropriate for the governed semantic master and has been reviewed.",
+                "authorization_confirmed": True,
+            },
+        )
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.json()["applied_concept_version"], 2)
+
+        with connection() as conn:
+            versions = conn.execute(
+                """SELECT version, status FROM semantic_concepts
+                   WHERE concept_id='BRAND:BRUKINSA' ORDER BY version"""
+            ).fetchall()
+            self.assertEqual(
+                [(row["version"], row["status"]) for row in versions],
+                [(1, "SUPERSEDED"), (2, "ACTIVE")],
+            )
+            resolved = resolve_mentions(conn, "Use the Brukinsa product evidence.")
+            self.assertIn("BRAND:BRUKINSA", {item.concept_id for item in resolved})
+
+        decided = self.client.get(
+            "/v1/semantic/change-requests",
+            headers=reviewer_auth,
+        ).json()
+        self.assertEqual(decided[0]["status"], "APPROVED")
+        self.assertEqual(decided[0]["applied_concept_version"], 2)
 
     def test_semantic_graph_creates_typed_brand_relationship(self):
         upload = self.client.post(
