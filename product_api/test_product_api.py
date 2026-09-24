@@ -7,6 +7,7 @@ from pathlib import Path
 TEMP = tempfile.TemporaryDirectory()
 os.environ["PRODUCT_DATA_DIR"] = TEMP.name
 os.environ["PRODUCT_DB_PATH"] = str(Path(TEMP.name) / "test.db")
+os.environ["PLATFORM_ADMIN_KEY"] = "test-platform-admin-key"
 
 from fastapi.testclient import TestClient  # noqa: E402
 from product_api.app import app, connection  # noqa: E402
@@ -20,7 +21,7 @@ class ProductApiTests(unittest.TestCase):
         self.client.__enter__()
         with connection() as conn:
             for table in (
-                "graph_edges", "graph_nodes", "document_findings", "document_chunks", "audit_events",
+                "graph_edges", "graph_nodes", "document_findings", "document_chunks", "audit_events", "api_principals",
                 "ingestion_jobs", "documents", "tenants",
             ):
                 conn.execute(f"DELETE FROM {table}")
@@ -81,6 +82,37 @@ class ProductApiTests(unittest.TestCase):
 
     def test_empty_queue_returns_none(self):
         self.assertIsNone(process_next_job())
+
+    def test_authenticated_query_uses_credential_role_and_is_audited(self):
+        upload = self.client.post(
+            "/v1/documents",
+            headers=self.headers("tenant_a"),
+            files={"file": ("medical.txt", b"ALPINE reports efficacy evidence for zanubrutinib in CLL.", "text/plain")},
+            data={"market": "Global", "data_class": "MEDICAL_SCIENTIFIC_EVIDENCE", "sensitivity": "MEDICAL_ONLY"},
+        ).json()
+        process_ingestion_job(upload["job_id"], "tenant_a")
+        issued = self.client.post(
+            "/v1/auth/api-keys",
+            headers={"X-Platform-Admin-Key": "test-platform-admin-key"},
+            json={"tenant_id": "tenant_a", "actor_id": "medical_user", "role": "ROLE_MEDICAL"},
+        )
+        self.assertEqual(issued.status_code, 201)
+        response = self.client.post(
+            "/v1/query",
+            headers={"Authorization": f"Bearer {issued.json()['api_key']}"},
+            json={"question": "What efficacy was reported in ALPINE?", "purpose": "MEDICAL_RESPONSE", "market": "Global"},
+        )
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertEqual(result["status"], "EVIDENCE_ONLY")
+        self.assertEqual(result["role"], "ROLE_MEDICAL")
+        self.assertTrue(result["audit_id"].startswith("AUD_"))
+        unauthorized = self.client.post(
+            "/v1/query",
+            headers={"Authorization": "Bearer invalid"},
+            json={"question": "What efficacy was reported?", "purpose": "MEDICAL_RESPONSE", "market": "Global"},
+        )
+        self.assertEqual(unauthorized.status_code, 401)
 
     def test_hybrid_retrieval_is_tenant_market_and_policy_scoped(self):
         response = self.client.post(
