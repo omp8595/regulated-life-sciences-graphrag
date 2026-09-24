@@ -48,3 +48,17 @@ result = hybrid_search(
 Retrieval filters tenant, market, document state, role and purpose before
 returning evidence. Results remain `EVIDENCE_ONLY` until a genuine SME review
 creates a governed claim.
+
+## Authenticated query API
+
+Configure an administrator provisioning secret before starting the API:
+
+```bash
+export PLATFORM_ADMIN_KEY="replace-with-a-secret-from-your-secret-manager"
+uvicorn product_api.app:app --port 8000
+```
+
+Provision `/v1/auth/api-keys` with `X-Platform-Admin-Key`, then call `/v1/query`
+with the returned key as `Authorization: Bearer <key>`. The key is stored only as
+a SHA-256 hash, its tenant and role cannot be overridden by the query body, and
+each query decision is written to the hash-linked audit chain.
