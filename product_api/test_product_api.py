@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from product_api.app import app, connection  # noqa: E402
 from product_api.worker import process_ingestion_job, process_next_job  # noqa: E402
 from product_api.retrieval import hybrid_search  # noqa: E402
+from product_api.semantic import resolve_mentions, semantic_match  # noqa: E402
 
 
 class ProductApiTests(unittest.TestCase):
@@ -211,6 +212,53 @@ class ProductApiTests(unittest.TestCase):
         ).json()
         self.assertEqual(after["status"], "ANSWERED")
         self.assertEqual(after["governed_claims"][0]["usage_condition"], "MLR_APPROVED_WORDING_ONLY")
+
+    def test_semantic_registry_resolves_brand_molecule_and_trial(self):
+        resolved = resolve_mentions("BRUKINSA and zanubrutinib were discussed in the ALPINE trial.")
+        concept_ids = {item.concept_id for item in resolved}
+        self.assertIn("BRAND:BRUKINSA", concept_ids)
+        self.assertIn("DRUG:ZANUBRUTINIB", concept_ids)
+        self.assertIn("TRIAL:ALPINE", concept_ids)
+
+        related = semantic_match("BRUKINSA", "zanubrutinib")
+        self.assertEqual(related["score"], 0.7)
+        self.assertEqual(related["direct_matches"], [])
+        self.assertEqual(related["related_matches"], ["DRUG:ZANUBRUTINIB"])
+
+    def test_semantic_graph_creates_typed_brand_relationship(self):
+        upload = self.client.post(
+            "/v1/documents",
+            headers=self.headers("tenant_a"),
+            files={"file": ("semantic.txt", b"BRUKINSA and zanubrutinib are referenced together.", "text/plain")},
+            data={"market": "Global", "data_class": "MEDICAL_SCIENTIFIC_EVIDENCE", "sensitivity": "MEDICAL_ONLY"},
+        ).json()
+        process_ingestion_job(upload["job_id"], "tenant_a")
+        with connection() as conn:
+            relationships = {
+                row["relationship"]
+                for row in conn.execute(
+                    """SELECT e.relationship
+                       FROM graph_edges e
+                       JOIN graph_nodes source ON source.node_id=e.source_node_id AND source.tenant_id=e.tenant_id
+                       JOIN graph_nodes target ON target.node_id=e.target_node_id AND target.tenant_id=e.tenant_id
+                       WHERE e.tenant_id=? AND source.label='BRUKINSA' AND target.label='zanubrutinib'""",
+                    ("tenant_a",),
+                ).fetchall()
+            }
+        self.assertIn("BRAND_OF", relationships)
+
+    def test_semantic_retrieval_expands_brand_to_molecule(self):
+        upload = self.client.post(
+            "/v1/documents",
+            headers=self.headers("tenant_a"),
+            files={"file": ("molecule.txt", b"zanubrutinib", "text/plain")},
+            data={"market": "Global", "data_class": "MEDICAL_SCIENTIFIC_EVIDENCE", "sensitivity": "MEDICAL_ONLY"},
+        ).json()
+        process_ingestion_job(upload["job_id"], "tenant_a")
+        result = hybrid_search("BRUKINSA", "tenant_a", "ROLE_MEDICAL", "MEDICAL_RESPONSE", "Global")
+        self.assertEqual(result["status"], "EVIDENCE_ONLY")
+        self.assertGreater(result["results"][0]["graph_score"], 0)
+        self.assertIn("zanubrutinib", result["results"][0]["semantic_related_matches"])
 
     def test_unified_product_ui_builds(self):
         from product_ui import build_ui
