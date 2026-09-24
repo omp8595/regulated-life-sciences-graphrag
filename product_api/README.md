@@ -30,3 +30,21 @@ print(process_next_job())
 The worker validates the file, extracts text, detects sensitive data and prompt
 injection, creates tenant-scoped chunks, and finishes at `READY_FOR_SME_REVIEW`.
 It never creates an SME-validated or MLR-approved claim automatically.
+
+## Tenant-scoped hybrid retrieval
+
+```python
+from product_api.retrieval import hybrid_search
+
+result = hybrid_search(
+    question="How did zanubrutinib compare with ibrutinib in ALPINE?",
+    tenant_id="demo_pharma",
+    role="ROLE_MEDICAL",
+    purpose="MEDICAL_RESPONSE",
+    market="Global",
+)
+```
+
+Retrieval filters tenant, market, document state, role and purpose before
+returning evidence. Results remain `EVIDENCE_ONLY` until a genuine SME review
+creates a governed claim.
