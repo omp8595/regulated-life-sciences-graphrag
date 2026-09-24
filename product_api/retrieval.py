@@ -6,7 +6,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from product_api.app import connection, initialize_database
-from product_api.worker import KNOWN_ENTITIES
+from product_api.semantic import get_concept, resolve_mentions, semantic_match
 
 
 WORD = re.compile(r"[a-zA-Z0-9]+")
@@ -24,8 +24,15 @@ def cosine(left: Counter, right: Counter) -> float:
 
 
 def detected_entities(text: str) -> list[str]:
-    lowered = text.lower()
-    return sorted({label for term, (_, label) in KNOWN_ENTITIES.items() if re.search(rf"\b{re.escape(term)}\b", lowered)})
+    return sorted({mention.canonical_name for mention in resolve_mentions(text)})
+
+
+def concept_labels(concept_ids: list[str]) -> list[str]:
+    labels = []
+    for concept_id in concept_ids:
+        concept = get_concept(concept_id)
+        labels.append(concept.canonical_name if concept else concept_id)
+    return sorted(labels)
 
 
 def policy_decision(role: str, purpose: str, data_class: str) -> tuple[str, str]:
@@ -82,7 +89,9 @@ def hybrid_search(
                 if decision != "ALLOW":
                     governed_blocked.append(condition)
                     continue
-            score = cosine(query_tokens, Counter(tokens(claim["claim_text"])))
+            lexical = cosine(query_tokens, Counter(tokens(claim["claim_text"])))
+            semantic = semantic_match(question, claim["claim_text"])
+            score = (0.75 * lexical) + (0.25 * semantic["score"])
             if score > 0:
                 governed_matches.append(
                     {
@@ -98,6 +107,10 @@ def hybrid_search(
                         "chunk_id": claim["chunk_id"],
                         "file_name": claim["file_name"],
                         "score": round(score, 4),
+                        "lexical_score": round(lexical, 4),
+                        "semantic_score": semantic["score"],
+                        "semantic_direct_matches": concept_labels(semantic["direct_matches"]),
+                        "semantic_related_matches": concept_labels(semantic["related_matches"]),
                         "usage_condition": condition,
                     }
                 )
@@ -137,9 +150,8 @@ def hybrid_search(
                 blocked_conditions.append(condition)
                 continue
             lexical = cosine(query_tokens, Counter(tokens(row["chunk_text"])))
-            chunk_entities = detected_entities(row["chunk_text"])
-            shared_entities = sorted(set(anchors) & set(chunk_entities))
-            graph_score = len(shared_entities) / max(len(anchors), 1)
+            semantic = semantic_match(question, row["chunk_text"])
+            graph_score = semantic["score"]
             hybrid_score = (0.75 * lexical) + (0.25 * graph_score)
             if hybrid_score > 0:
                 allowed.append(
@@ -154,7 +166,11 @@ def hybrid_search(
                         "lexical_score": round(lexical, 4),
                         "graph_score": round(graph_score, 4),
                         "hybrid_score": round(hybrid_score, 4),
-                        "graph_anchors": shared_entities,
+                        "graph_anchors": concept_labels(
+                            semantic["direct_matches"] + semantic["related_matches"]
+                        ),
+                        "semantic_direct_matches": concept_labels(semantic["direct_matches"]),
+                        "semantic_related_matches": concept_labels(semantic["related_matches"]),
                         "usage_condition": condition,
                     }
                 )
