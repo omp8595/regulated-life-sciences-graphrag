@@ -41,6 +41,7 @@ Source documents
 
 - `app.py` — runnable governed GraphRAG Gradio interface
 - `smoke_test.py` — deterministic role, purpose and market smoke tests
+- `product_api/` — multi-tenant ingestion and audit API foundation
 - `platform_artifacts/` — database, graph, retrieval index, policies, audit logs, test results, and source documents
 - `release/` — complete downloadable ZIP archive
 - `requirements.txt` — Python dependencies for rebuilding the prototype
@@ -52,6 +53,14 @@ pip install -r requirements.txt
 python smoke_test.py
 GRADIO_SHARE=true python app.py
 ```
+
+Run the product API:
+
+```bash
+uvicorn product_api.app:app --reload --port 8000
+```
+
+The interactive API documentation is available at `http://127.0.0.1:8000/docs`.
 
 The smoke suite verifies governed US dosage, promotional blocking, medical evidence discovery and India-market abstention.
 
