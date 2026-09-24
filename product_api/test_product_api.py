@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from product_api.app import app, connection  # noqa: E402
 from product_api.worker import process_ingestion_job, process_next_job  # noqa: E402
 from product_api.retrieval import hybrid_search  # noqa: E402
-from product_api.semantic import resolve_mentions, semantic_match  # noqa: E402
+from product_api.semantic.store import list_semantic_concepts, resolve_mentions, semantic_match  # noqa: E402
 
 
 class ProductApiTests(unittest.TestCase):
@@ -213,17 +213,50 @@ class ProductApiTests(unittest.TestCase):
         self.assertEqual(after["status"], "ANSWERED")
         self.assertEqual(after["governed_claims"][0]["usage_condition"], "MLR_APPROVED_WORDING_ONLY")
 
-    def test_semantic_registry_resolves_brand_molecule_and_trial(self):
-        resolved = resolve_mentions("BRUKINSA and zanubrutinib were discussed in the ALPINE trial.")
-        concept_ids = {item.concept_id for item in resolved}
-        self.assertIn("BRAND:BRUKINSA", concept_ids)
-        self.assertIn("DRUG:ZANUBRUTINIB", concept_ids)
-        self.assertIn("TRIAL:ALPINE", concept_ids)
+    def test_semantic_master_persists_versioned_concepts_and_external_mappings(self):
+        with connection() as conn:
+            concepts = list_semantic_concepts(conn)
+            by_id = {concept["concept_id"]: concept for concept in concepts}
+            self.assertEqual(by_id["DRUG:ZANUBRUTINIB"]["version"], 1)
+            self.assertEqual(by_id["TRIAL:ALPINE"]["semantic_version"], "pharma-v2")
+            self.assertIn(
+                {"system": "CLINICALTRIALS.GOV", "identifier": "NCT03734016",
+                 "source_uri": "https://clinicaltrials.gov/study/NCT03734016"},
+                by_id["TRIAL:ALPINE"]["external_mappings"],
+            )
+            self.assertIn(
+                {"system": "RXNORM", "identifier": "2262435",
+                 "source_uri": "https://rxnav.nlm.nih.gov/id/rxnorm/2262435"},
+                by_id["DRUG:ZANUBRUTINIB"]["external_mappings"],
+            )
 
-        related = semantic_match("BRUKINSA", "zanubrutinib")
+    def test_semantic_registry_resolves_brand_molecule_and_trial(self):
+        with connection() as conn:
+            resolved = resolve_mentions(conn, "BRUKINSA and zanubrutinib were discussed in the ALPINE trial.")
+            concept_ids = {item.concept_id for item in resolved}
+            self.assertIn("BRAND:BRUKINSA", concept_ids)
+            self.assertIn("DRUG:ZANUBRUTINIB", concept_ids)
+            self.assertIn("TRIAL:ALPINE", concept_ids)
+
+            related = semantic_match(conn, "BRUKINSA", "zanubrutinib")
         self.assertEqual(related["score"], 0.7)
         self.assertEqual(related["direct_matches"], [])
         self.assertEqual(related["related_matches"], ["DRUG:ZANUBRUTINIB"])
+
+    def test_authenticated_semantic_catalog_endpoint(self):
+        issued = self.client.post(
+            "/v1/auth/api-keys",
+            headers={"X-Platform-Admin-Key": "test-platform-admin-key"},
+            json={"tenant_id": "tenant_a", "actor_id": "semantic_reader", "role": "ROLE_MEDICAL"},
+        ).json()
+        response = self.client.get(
+            "/v1/semantic/concepts",
+            headers={"Authorization": f"Bearer {issued['api_key']}"},
+        )
+        self.assertEqual(response.status_code, 200)
+        concept_ids = {concept["concept_id"] for concept in response.json()}
+        self.assertIn("DRUG:ZANUBRUTINIB", concept_ids)
+        self.assertIn("TRIAL:ALPINE", concept_ids)
 
     def test_semantic_graph_creates_typed_brand_relationship(self):
         upload = self.client.post(
