@@ -6,7 +6,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from product_api.app import connection, initialize_database
-from product_api.semantic import get_concept, resolve_mentions, semantic_match
+from product_api.semantic.store import concept_labels, resolve_mentions, semantic_match
 
 
 WORD = re.compile(r"[a-zA-Z0-9]+")
@@ -21,18 +21,6 @@ def cosine(left: Counter, right: Counter) -> float:
     numerator = sum(value * right.get(term, 0) for term, value in left.items())
     denominator = math.sqrt(sum(v * v for v in left.values())) * math.sqrt(sum(v * v for v in right.values()))
     return numerator / denominator if denominator else 0.0
-
-
-def detected_entities(text: str) -> list[str]:
-    return sorted({mention.canonical_name for mention in resolve_mentions(text)})
-
-
-def concept_labels(concept_ids: list[str]) -> list[str]:
-    labels = []
-    for concept_id in concept_ids:
-        concept = get_concept(concept_id)
-        labels.append(concept.canonical_name if concept else concept_id)
-    return sorted(labels)
 
 
 def policy_decision(role: str, purpose: str, data_class: str) -> tuple[str, str]:
@@ -57,8 +45,8 @@ def hybrid_search(
 ) -> dict:
     initialize_database()
     query_tokens = Counter(tokens(question))
-    anchors = detected_entities(question)
     with connection() as conn:
+        anchors = sorted({mention.canonical_name for mention in resolve_mentions(conn, question)})
         claim_rows = conn.execute(
             """SELECT g.*, e.document_id, e.chunk_id, d.file_name
                FROM governed_claims g
@@ -90,7 +78,7 @@ def hybrid_search(
                     governed_blocked.append(condition)
                     continue
             lexical = cosine(query_tokens, Counter(tokens(claim["claim_text"])))
-            semantic = semantic_match(question, claim["claim_text"])
+            semantic = semantic_match(conn, question, claim["claim_text"])
             score = (0.75 * lexical) + (0.25 * semantic["score"])
             if score > 0:
                 governed_matches.append(
@@ -109,8 +97,8 @@ def hybrid_search(
                         "score": round(score, 4),
                         "lexical_score": round(lexical, 4),
                         "semantic_score": semantic["score"],
-                        "semantic_direct_matches": concept_labels(semantic["direct_matches"]),
-                        "semantic_related_matches": concept_labels(semantic["related_matches"]),
+                        "semantic_direct_matches": concept_labels(conn, semantic["direct_matches"]),
+                        "semantic_related_matches": concept_labels(conn, semantic["related_matches"]),
                         "usage_condition": condition,
                     }
                 )
@@ -150,7 +138,7 @@ def hybrid_search(
                 blocked_conditions.append(condition)
                 continue
             lexical = cosine(query_tokens, Counter(tokens(row["chunk_text"])))
-            semantic = semantic_match(question, row["chunk_text"])
+            semantic = semantic_match(conn, question, row["chunk_text"])
             graph_score = semantic["score"]
             hybrid_score = (0.75 * lexical) + (0.25 * graph_score)
             if hybrid_score > 0:
@@ -167,10 +155,10 @@ def hybrid_search(
                         "graph_score": round(graph_score, 4),
                         "hybrid_score": round(hybrid_score, 4),
                         "graph_anchors": concept_labels(
-                            semantic["direct_matches"] + semantic["related_matches"]
+                            conn, semantic["direct_matches"] + semantic["related_matches"]
                         ),
-                        "semantic_direct_matches": concept_labels(semantic["direct_matches"]),
-                        "semantic_related_matches": concept_labels(semantic["related_matches"]),
+                        "semantic_direct_matches": concept_labels(conn, semantic["direct_matches"]),
+                        "semantic_related_matches": concept_labels(conn, semantic["related_matches"]),
                         "usage_condition": condition,
                     }
                 )
