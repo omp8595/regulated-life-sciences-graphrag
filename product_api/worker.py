@@ -15,6 +15,7 @@ from product_api.app import (
     initialize_database,
     utc_now,
 )
+from product_api.semantic import relationships_for_concepts, resolve_mentions
 
 
 EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
@@ -25,14 +26,6 @@ PROMPT_INJECTION = re.compile(
     r"developer\s+message|reveal\s+(?:your|the)\s+prompt",
     re.I,
 )
-KNOWN_ENTITIES = {
-    "zanubrutinib": ("DRUG", "zanubrutinib"),
-    "brukinsa": ("BRAND", "BRUKINSA"),
-    "ibrutinib": ("DRUG", "ibrutinib"),
-    "alpine": ("CLINICAL_TRIAL", "ALPINE"),
-    "cll": ("INDICATION", "CLL"),
-    "sll": ("INDICATION", "SLL"),
-}
 
 
 def _extract_pdf(path: Path) -> list[tuple[int | None, str]]:
@@ -134,15 +127,39 @@ def index_graph(conn: sqlite3.Connection, tenant_id: str, document: sqlite3.Row,
                 (f"EDG_{uuid.uuid4().hex[:12].upper()}", tenant_id, source, target, relationship, utc_now()),
             )
             edge_count += 1
-        lowered = chunk_text.lower()
-        for term, (node_type, label) in KNOWN_ENTITIES.items():
-            if re.search(rf"\b{re.escape(term)}\b", lowered):
-                entity_node = _node(conn, tenant_id, node_type, label, {})
-                conn.execute(
-                    "INSERT OR IGNORE INTO graph_edges VALUES (?, ?, ?, ?, ?, ?)",
-                    (f"EDG_{uuid.uuid4().hex[:12].upper()}", tenant_id, entity_node, chunk_node, "MENTIONED_IN", utc_now()),
-                )
-                edge_count += 1
+        resolved = resolve_mentions(chunk_text)
+        entity_nodes: dict[str, str] = {}
+        for mention in resolved:
+            entity_node = _node(
+                conn,
+                tenant_id,
+                mention.concept_type,
+                mention.canonical_name,
+                {
+                    "canonical_id": mention.concept_id,
+                    "semantic_version": "pharma-v1",
+                },
+            )
+            entity_nodes[mention.concept_id] = entity_node
+            conn.execute(
+                "INSERT OR IGNORE INTO graph_edges VALUES (?, ?, ?, ?, ?, ?)",
+                (f"EDG_{uuid.uuid4().hex[:12].upper()}", tenant_id, entity_node, chunk_node, "MENTIONED_IN", utc_now()),
+            )
+            edge_count += 1
+
+        for relation in relationships_for_concepts(entity_nodes):
+            conn.execute(
+                "INSERT OR IGNORE INTO graph_edges VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    f"EDG_{uuid.uuid4().hex[:12].upper()}",
+                    tenant_id,
+                    entity_nodes[relation.source_id],
+                    entity_nodes[relation.target_id],
+                    relation.relationship,
+                    utc_now(),
+                ),
+            )
+            edge_count += 1
     return edge_count
 
 
