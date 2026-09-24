@@ -19,7 +19,9 @@ Source documents
 
 ## Capabilities
 
-- Hybrid lexical retrieval and graph traversal
+- Canonical pharma semantic layer with versioned master data, alias normalization and typed relationships
+- Governed semantic change requests with independent approval, version supersession and audit lineage
+- Hybrid lexical retrieval and graph traversal with one-hop semantic expansion
 - Multi-hop GraphRAG with source, document, page, and chunk lineage
 - Role-, purpose-, market-, and data-class-aware access controls
 - Governed answers, evidence discovery, policy blocks, and abstention
@@ -41,7 +43,9 @@ Source documents
 
 - `app.py` — runnable governed GraphRAG Gradio interface
 - `smoke_test.py` — deterministic role, purpose and market smoke tests
-- `product_api/` — multi-tenant ingestion and audit API foundation
+- `product_api/` — multi-tenant ingestion, semantic normalization, governed retrieval and audit API
+- `product_api/semantic/` — canonical pharma concepts, aliases and typed relationships
+- `docs/semantic_layer.md` — Semantic Layer v1 architecture and extension strategy
 - `product_ui.py` — unified ingestion, query, SME, MLR and governance workspace
 - `platform_artifacts/` — database, graph, retrieval index, policies, audit logs, test results, and source documents
 - `release/` — complete downloadable ZIP archive

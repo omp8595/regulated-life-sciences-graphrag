@@ -1,4 +1,4 @@
-# Product API — Sprint 1
+# Product API — Semantic Layer v1
 
 This service introduces tenant-isolated document ingestion and hash-linked audit events.
 
@@ -30,6 +30,35 @@ print(process_next_job())
 The worker validates the file, extracts text, detects sensitive data and prompt
 injection, creates tenant-scoped chunks, and finishes at `READY_FOR_SME_REVIEW`.
 It never creates an SME-validated or MLR-approved claim automatically.
+
+## Pharma semantic normalization
+
+The semantic registry is persisted as versioned platform master data in SQLite. The bootstrap data seeds concepts, aliases, typed relationships and authoritative external mappings idempotently. Ingestion and retrieval read the active database-backed master rather than Python constants.
+
+The authenticated `GET /v1/semantic/concepts` endpoint returns the current active catalog, aliases and external mappings.
+
+The ingestion worker resolves curated aliases to canonical concepts before graph
+indexing. Semantic nodes carry a stable canonical ID and concept type, while
+registry relationships create typed edges such as `BRAND_OF`, `EVALUATES`,
+`COMPARES_WITH`, `STUDIES_INDICATION`, and `TARGETS`.
+
+Retrieval combines lexical similarity with direct canonical-concept overlap and
+one-hop semantic expansion. This means a governed query for `BRUKINSA` can
+discover permitted evidence that uses the molecule name `zanubrutinib` even
+when the literal brand name is absent. The semantic registry is deterministic
+and curated; it does not create regulatory or promotional claims.
+
+## Governed semantic-master changes
+
+Semantic master edits are proposed through authenticated change requests rather
+than written directly. `ROLE_MEDICAL`, `ROLE_REGULATORY`, and
+`ROLE_SEMANTIC_STEWARD` can propose supported changes. Approval is restricted
+to an independent `ROLE_REGULATORY` or `ROLE_SEMANTIC_STEWARD` reviewer.
+
+An approved alias, external mapping, or canonical-name change creates the next
+active concept version and retains the previous version as `SUPERSEDED`.
+Approval requires explicit authorization confirmation and a substantive
+rationale. Proposal and decision events are hash-audited.
 
 ## Tenant-scoped hybrid retrieval
 
