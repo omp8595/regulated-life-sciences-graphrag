@@ -253,15 +253,44 @@ def orchestrate(question: str, role: str, purpose: str, selected_market: str) ->
     }
 
 
+def evidence_overview(result: dict) -> str:
+    evidence = result.get("evidence_results", [])
+    if not evidence:
+        return "No evidence overview is available for this decision."
+
+    grouped: dict[str, list[dict]] = {}
+    for item in evidence:
+        grouped.setdefault(item.get("focus", "GENERAL"), []).append(item)
+
+    sections = [
+        "**Evidence overview — not an SME-validated or MLR-approved conclusion**"
+    ]
+    for focus, items in grouped.items():
+        sections.append(f"\n### {focus.replace('_', ' ').title()}")
+        for item in items[:2]:
+            excerpt = re.sub(r"\s+", " ", item["passage"]).strip()
+            if len(excerpt) > 360:
+                excerpt = excerpt[:357].rstrip() + "..."
+            sections.append(
+                f"- **{item['file']}, page {item['page']}** — {excerpt}"
+            )
+    sections.append(
+        "\n*Interpretation requires authorized medical review; retrieved passages may contain study-specific qualifications and limitations.*"
+    )
+    return "\n".join(sections)
+
+
 def run_ui(question: str, role: str, purpose: str, market: str):
     result = orchestrate(question, role, purpose, market)
+    intents = ", ".join(result.get("intents", [result.get("intent", "UNKNOWN")]))
     citations = "\n".join(f"- [{c['title']}]({c['url']})" for c in result.get("citations", [])) or "No governed citation returned."
+    overview = evidence_overview(result)
     evidence = "\n\n".join(
         f"### Evidence {i}\n**Focus:** {item.get('focus', 'GENERAL')}  \n**File:** {item['file']} — page {item['page']} — score {item['score']}\n\n> {item['passage']}"
         for i, item in enumerate(result.get("evidence_results", []), 1)
     ) or "No raw evidence exposed."
     trace = json.dumps({k: v for k, v in result.items() if k not in {"answer", "evidence_results"}}, indent=2)
-    return result.get("status", ""), result.get("response_type", ""), result.get("answer", ""), citations, evidence, trace
+    return result.get("status", ""), result.get("response_type", ""), intents, result.get("answer", ""), overview, citations, evidence, trace
 
 
 def build_app() -> gr.Blocks:
@@ -276,13 +305,15 @@ def build_app() -> gr.Blocks:
         with gr.Row():
             status = gr.Textbox(label="Decision status")
             response_type = gr.Textbox(label="Response type")
+            intents = gr.Textbox(label="Detected intents")
         answer = gr.Textbox(label="Governed response", lines=4)
+        overview = gr.Markdown(label="Evidence overview")
         citations = gr.Markdown(label="Citation chain")
-        with gr.Accordion("Retrieved evidence", open=False):
+        with gr.Accordion("Retrieved evidence", open=True):
             evidence = gr.Markdown()
         with gr.Accordion("Decision trace", open=False):
             trace = gr.Code(language="json")
-        ask.click(run_ui, [question, role, purpose, market], [status, response_type, answer, citations, evidence, trace])
+        ask.click(run_ui, [question, role, purpose, market], [status, response_type, intents, answer, overview, citations, evidence, trace])
         gr.Markdown("**Prototype notice:** Evidence discovery is not an approved medical, regulatory or promotional claim.")
     return demo
 
