@@ -114,6 +114,59 @@ def initialize_database() -> None:
                 created_at_utc TEXT NOT NULL,
                 UNIQUE(tenant_id, source_node_id, target_node_id, relationship_type)
             );
+            CREATE TABLE IF NOT EXISTS semantic_concepts (
+                concept_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                concept_type TEXT NOT NULL,
+                canonical_name TEXT NOT NULL,
+                semantic_version TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                PRIMARY KEY (concept_id, version)
+            );
+            CREATE TABLE IF NOT EXISTS semantic_aliases (
+                alias_id TEXT PRIMARY KEY,
+                concept_id TEXT NOT NULL,
+                concept_version INTEGER NOT NULL,
+                alias TEXT NOT NULL,
+                normalized_alias TEXT NOT NULL,
+                source TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                FOREIGN KEY (concept_id, concept_version)
+                    REFERENCES semantic_concepts(concept_id, version),
+                UNIQUE(concept_id, concept_version, normalized_alias)
+            );
+            CREATE TABLE IF NOT EXISTS semantic_relationships (
+                relationship_id TEXT PRIMARY KEY,
+                source_concept_id TEXT NOT NULL,
+                source_version INTEGER NOT NULL,
+                relationship_type TEXT NOT NULL,
+                target_concept_id TEXT NOT NULL,
+                target_version INTEGER NOT NULL,
+                semantic_version TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                FOREIGN KEY (source_concept_id, source_version)
+                    REFERENCES semantic_concepts(concept_id, version),
+                FOREIGN KEY (target_concept_id, target_version)
+                    REFERENCES semantic_concepts(concept_id, version),
+                UNIQUE(source_concept_id, source_version, relationship_type, target_concept_id, target_version)
+            );
+            CREATE TABLE IF NOT EXISTS semantic_external_mappings (
+                mapping_id TEXT PRIMARY KEY,
+                concept_id TEXT NOT NULL,
+                concept_version INTEGER NOT NULL,
+                system TEXT NOT NULL,
+                identifier TEXT NOT NULL,
+                source_uri TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                FOREIGN KEY (concept_id, concept_version)
+                    REFERENCES semantic_concepts(concept_id, version),
+                UNIQUE(system, identifier, concept_id, concept_version)
+            );
             CREATE TABLE IF NOT EXISTS audit_events (
                 sequence_number INTEGER PRIMARY KEY AUTOINCREMENT,
                 audit_id TEXT UNIQUE NOT NULL,
@@ -217,6 +270,14 @@ def initialize_database() -> None:
                 ON graph_nodes(tenant_id, node_type, label);
             CREATE INDEX IF NOT EXISTS idx_graph_edges_tenant
                 ON graph_edges(tenant_id, source_node_id, target_node_id);
+            CREATE INDEX IF NOT EXISTS idx_semantic_concepts_active
+                ON semantic_concepts(concept_id, status, version);
+            CREATE INDEX IF NOT EXISTS idx_semantic_alias_lookup
+                ON semantic_aliases(normalized_alias, status);
+            CREATE INDEX IF NOT EXISTS idx_semantic_relationships_active
+                ON semantic_relationships(source_concept_id, target_concept_id, status);
+            CREATE INDEX IF NOT EXISTS idx_semantic_external_mapping
+                ON semantic_external_mappings(system, identifier, status);
             CREATE INDEX IF NOT EXISTS idx_audit_tenant
                 ON audit_events(tenant_id, sequence_number);
             CREATE INDEX IF NOT EXISTS idx_principals_tenant
@@ -234,6 +295,9 @@ def initialize_database() -> None:
         for column in ("effective_from_utc", "expires_at_utc", "conditions_of_use"):
             if column not in existing_columns:
                 conn.execute(f"ALTER TABLE governed_claims ADD COLUMN {column} TEXT")
+
+        from product_api.semantic.store import seed_semantic_master
+        seed_semantic_master(conn, utc_now())
 
 
 class TenantContext(BaseModel):
@@ -415,6 +479,17 @@ def create_api_key(
         "api_key": raw_key,
         "warning": "Store this key securely; it will not be shown again.",
     }
+
+
+@app.get("/v1/semantic/concepts")
+def semantic_concepts(
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> list[dict]:
+    from product_api.semantic.store import list_semantic_concepts
+
+    with connection() as conn:
+        concepts = list_semantic_concepts(conn)
+    return concepts
 
 
 @app.post("/v1/query")
