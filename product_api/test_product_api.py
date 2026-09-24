@@ -212,6 +212,12 @@ class ProductApiTests(unittest.TestCase):
         self.assertEqual(after["status"], "ANSWERED")
         self.assertEqual(after["governed_claims"][0]["usage_condition"], "MLR_APPROVED_WORDING_ONLY")
 
+    def test_unified_product_ui_builds(self):
+        from product_ui import build_ui
+
+        demo = build_ui()
+        self.assertIsNotNone(demo)
+
     def test_hybrid_retrieval_is_tenant_market_and_policy_scoped(self):
         response = self.client.post(
             "/v1/documents",
