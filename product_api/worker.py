@@ -16,6 +16,7 @@ from product_api.app import (
     utc_now,
 )
 from product_api.semantic.store import relationships_for_concepts, resolve_mentions
+from product_api.evidence_intelligence import persist_evidence_intelligence
 
 
 EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
@@ -237,6 +238,10 @@ def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_w
             )
             chunks = chunk_pages(pages)
             conn.execute(
+                "DELETE FROM evidence_intelligence WHERE tenant_id=? AND document_id=?",
+                (tenant_id, document["document_id"]),
+            )
+            conn.execute(
                 "DELETE FROM document_chunks WHERE tenant_id=? AND document_id=?",
                 (tenant_id, document["document_id"]),
             )
@@ -256,15 +261,31 @@ def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_w
             graph_edges = index_graph(conn, tenant_id, document, chunks)
 
             conn.execute(
-                "UPDATE ingestion_jobs SET stage='CANDIDATE_EXTRACTION', updated_at_utc=? WHERE job_id=?",
+                "UPDATE ingestion_jobs SET stage='EVIDENCE_INTELLIGENCE', updated_at_utc=? WHERE job_id=?",
                 (utc_now(), job_id),
             )
-            candidate_count = 0
             chunk_rows = conn.execute(
                 """SELECT chunk_id, chunk_text FROM document_chunks
                    WHERE tenant_id=? AND document_id=? ORDER BY chunk_sequence""",
                 (tenant_id, document["document_id"]),
             ).fetchall()
+            evidence_structure_count = 0
+            for chunk_row in chunk_rows:
+                persist_evidence_intelligence(
+                    conn,
+                    tenant_id,
+                    document["document_id"],
+                    chunk_row["chunk_id"],
+                    chunk_row["chunk_text"],
+                    utc_now(),
+                )
+                evidence_structure_count += 1
+
+            conn.execute(
+                "UPDATE ingestion_jobs SET stage='CANDIDATE_EXTRACTION', updated_at_utc=? WHERE job_id=?",
+                (utc_now(), job_id),
+            )
+            candidate_count = 0
             for chunk_row in chunk_rows:
                 conn.execute(
                     """INSERT OR IGNORE INTO candidate_claims VALUES
@@ -298,6 +319,7 @@ def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_w
                 "chunks_created": len(chunks),
                 "finding_types": [f[0] for f in findings],
                 "graph_edges_created": graph_edges,
+                "evidence_structures_created": evidence_structure_count,
                 "candidates_created": candidate_count,
                 "audit_id": audit_id,
                 "idempotent": False,

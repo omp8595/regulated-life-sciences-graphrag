@@ -200,6 +200,30 @@ def _workspace_evidence_rows(result: dict) -> list[list]:
     return rows
 
 
+def _workspace_scientific_rows(result: dict) -> list[list]:
+    rows = []
+    source_items = result.get("governed_claims") or result.get("results") or []
+    for item in source_items:
+        intelligence = item.get("evidence_intelligence") or {}
+        population = intelligence.get("population") or {}
+        intervention = intelligence.get("intervention") or {}
+        rows.append(
+            [
+                ", ".join(intelligence.get("study") or []),
+                ", ".join(population.get("indications") or []),
+                " | ".join(population.get("context") or []),
+                ", ".join(intervention.get("interventions") or []),
+                ", ".join(intelligence.get("comparator") or []),
+                ", ".join(intelligence.get("endpoint") or []),
+                " | ".join(intelligence.get("outcome") or []),
+                " | ".join(intelligence.get("safety") or []),
+                intelligence.get("review_status", ""),
+                intelligence.get("extraction_method", ""),
+            ]
+        )
+    return rows
+
+
 def _workspace_provenance_rows(result: dict) -> list[list]:
     rows = []
     source_items = result.get("governed_claims") or result.get("results") or []
@@ -223,6 +247,7 @@ def run_query_workspace(api_key, question, purpose, market, top_k):
     result = run_query(api_key, question, purpose, market, top_k)
     return (
         _workspace_summary(result, question),
+        _workspace_scientific_rows(result),
         _workspace_evidence_rows(result),
         _workspace_provenance_rows(result),
         result,
@@ -409,7 +434,7 @@ def build_ui():
         with gr.Tab("Medical Evidence Workspace"):
             gr.Markdown(
                 "Ask a medical or regulatory question and review the governed answer, "
-                "semantic reasoning path, evidence, provenance and policy state in one place."
+                "semantic reasoning path, structured scientific evidence, provenance and policy state in one place."
             )
             question = gr.Textbox(
                 label="Question",
@@ -430,6 +455,24 @@ def build_ui():
                 top_k = gr.Slider(1, 10, value=3, step=1, label="Evidence results")
             query_button = gr.Button("Ask governed platform", variant="primary")
             query_summary = gr.Markdown(label="Governed response")
+            query_scientific = gr.Dataframe(
+                headers=[
+                    "Study",
+                    "Population / indication",
+                    "Population context",
+                    "Intervention",
+                    "Comparator",
+                    "Endpoint",
+                    "Outcome evidence",
+                    "Safety evidence",
+                    "Extraction review status",
+                    "Extraction method",
+                ],
+                datatype=["str"] * 10,
+                interactive=False,
+                wrap=True,
+                label="Structured scientific evidence",
+            )
             query_evidence = gr.Dataframe(
                 headers=[
                     "Type",
@@ -467,7 +510,7 @@ def build_ui():
             query_button.click(
                 run_query_workspace,
                 [api_key, question, purpose, query_market, top_k],
-                [query_summary, query_evidence, query_provenance, query_output],
+                [query_summary, query_scientific, query_evidence, query_provenance, query_output],
             )
 
         with gr.Tab("SME validation"):

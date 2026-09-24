@@ -27,7 +27,7 @@ class ProductApiTests(unittest.TestCase):
                 "mlr_review_decisions", "mlr_review_queue", "governed_claim_evidence",
                 "governed_claims", "sme_review_decisions",
                 "candidate_claims", "graph_edges", "graph_nodes", "document_findings",
-                "document_chunks", "audit_events", "api_principals",
+                "evidence_intelligence", "document_chunks", "audit_events", "api_principals",
                 "ingestion_jobs", "documents", "tenants",
             ):
                 conn.execute(f"DELETE FROM {table}")
@@ -380,8 +380,74 @@ class ProductApiTests(unittest.TestCase):
         self.assertGreater(result["results"][0]["graph_score"], 0)
         self.assertIn("zanubrutinib", result["results"][0]["semantic_related_matches"])
 
+    def test_evidence_intelligence_extracts_structured_scientific_evidence(self):
+        from product_api.evidence_intelligence import list_evidence_intelligence
+
+        content = (
+            b"ALPINE evaluated zanubrutinib and ibrutinib in patients with relapsed or refractory "
+            b"chronic lymphocytic leukemia (CLL). Progression-free survival (PFS) was 78% versus "
+            b"66% at 24 months. Atrial fibrillation occurred in 5% versus 13%."
+        )
+        upload = self.client.post(
+            "/v1/documents",
+            headers=self.headers("tenant_a"),
+            files={"file": ("structured_evidence.txt", content, "text/plain")},
+            data={
+                "market": "Global",
+                "data_class": "MEDICAL_SCIENTIFIC_EVIDENCE",
+                "sensitivity": "MEDICAL_ONLY",
+            },
+        ).json()
+        processed = process_ingestion_job(upload["job_id"], "tenant_a")
+        self.assertEqual(processed["evidence_structures_created"], 1)
+
+        with connection() as conn:
+            records = list_evidence_intelligence(conn, "tenant_a", upload["document_id"])
+        self.assertEqual(len(records), 1)
+        structure = records[0]
+        self.assertEqual(structure["study"], ["ALPINE"])
+        self.assertIn("chronic lymphocytic leukemia", structure["population"]["indications"])
+        self.assertEqual(structure["intervention"]["interventions"], ["zanubrutinib"])
+        self.assertEqual(structure["comparator"], ["ibrutinib"])
+        self.assertIn("PFS", structure["endpoint"])
+        self.assertTrue(any("78%" in item for item in structure["outcome"]))
+        self.assertTrue(any("Atrial fibrillation" in item for item in structure["safety"]))
+        self.assertEqual(structure["review_status"], "UNVALIDATED_EXTRACTION")
+        self.assertEqual(structure["extraction_method"], "DETERMINISTIC_EVIDENCE_V1")
+
+        issued = self.client.post(
+            "/v1/auth/api-keys",
+            headers={"X-Platform-Admin-Key": "test-platform-admin-key"},
+            json={"tenant_id": "tenant_a", "actor_id": "evidence_reader", "role": "ROLE_MEDICAL"},
+        ).json()["api_key"]
+        catalog = self.client.get(
+            f"/v1/evidence/intelligence?document_id={upload['document_id']}",
+            headers={"Authorization": f"Bearer {issued}"},
+        )
+        self.assertEqual(catalog.status_code, 200)
+        self.assertEqual(catalog.json()[0]["chunk_id"], structure["chunk_id"])
+
+        result = hybrid_search(
+            "What evidence supports BRUKINSA in CLL?",
+            "tenant_a",
+            "ROLE_MEDICAL",
+            "MEDICAL_RESPONSE",
+            "Global",
+        )
+        self.assertEqual(result["status"], "EVIDENCE_ONLY")
+        self.assertIsNotNone(result["results"][0]["evidence_intelligence"])
+        self.assertEqual(
+            result["results"][0]["evidence_intelligence"]["review_status"],
+            "UNVALIDATED_EXTRACTION",
+        )
+
     def test_medical_evidence_workspace_formats_semantics_governance_and_lineage(self):
-        from product_ui import _workspace_evidence_rows, _workspace_provenance_rows, _workspace_summary
+        from product_ui import (
+            _workspace_evidence_rows,
+            _workspace_provenance_rows,
+            _workspace_scientific_rows,
+            _workspace_summary,
+        )
 
         result = {
             "status": "EVIDENCE_ONLY",
@@ -405,6 +471,23 @@ class ProductApiTests(unittest.TestCase):
                     "hybrid_score": 0.175,
                     "semantic_direct_matches": [],
                     "semantic_related_matches": ["zanubrutinib"],
+                    "evidence_intelligence": {
+                        "study": ["ALPINE"],
+                        "population": {
+                            "indications": ["chronic lymphocytic leukemia"],
+                            "context": ["patients with relapsed or refractory CLL"],
+                        },
+                        "intervention": {
+                            "interventions": ["zanubrutinib"],
+                            "unclassified_treatments": [],
+                        },
+                        "comparator": ["ibrutinib"],
+                        "endpoint": ["PFS"],
+                        "outcome": ["PFS was 78% versus 66% at 24 months."],
+                        "safety": ["Atrial fibrillation occurred in 5% versus 13%."],
+                        "review_status": "UNVALIDATED_EXTRACTION",
+                        "extraction_method": "DETERMINISTIC_EVIDENCE_V1",
+                    },
                 }
             ],
         }
@@ -419,6 +502,13 @@ class ProductApiTests(unittest.TestCase):
         self.assertEqual(evidence[0][0], "Evidence")
         self.assertEqual(evidence[0][3], "NOT_SME_VALIDATED")
         self.assertEqual(evidence[0][7], "zanubrutinib")
+
+        scientific = _workspace_scientific_rows(result)
+        self.assertEqual(scientific[0][0], "ALPINE")
+        self.assertEqual(scientific[0][3], "zanubrutinib")
+        self.assertEqual(scientific[0][4], "ibrutinib")
+        self.assertEqual(scientific[0][5], "PFS")
+        self.assertEqual(scientific[0][8], "UNVALIDATED_EXTRACTION")
 
         provenance = _workspace_provenance_rows(result)
         self.assertEqual(provenance[0][0], "alpine.txt")
