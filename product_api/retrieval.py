@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
+from datetime import datetime, timezone
 
 from product_api.app import connection, initialize_database
 from product_api.worker import KNOWN_ENTITIES
@@ -65,13 +66,22 @@ def hybrid_search(
         governed_matches = []
         governed_blocked = []
         for claim in claim_rows:
-            decision, condition = policy_decision(role, purpose, claim["data_class"])
-            if purpose == "PROMOTIONAL_CONTENT" and claim["approval_status"] != "MLR_APPROVED":
-                governed_blocked.append("MLR_APPROVAL_REQUIRED")
-                continue
-            if decision != "ALLOW":
-                governed_blocked.append(condition)
-                continue
+            if purpose == "PROMOTIONAL_CONTENT":
+                if claim["approval_status"] != "MLR_APPROVED":
+                    governed_blocked.append("MLR_APPROVAL_REQUIRED")
+                    continue
+                now = datetime.now(timezone.utc)
+                effective = datetime.fromisoformat(claim["effective_from_utc"]) if claim["effective_from_utc"] else None
+                expires = datetime.fromisoformat(claim["expires_at_utc"]) if claim["expires_at_utc"] else None
+                if not effective or not expires or now < effective or now >= expires:
+                    governed_blocked.append("MLR_APPROVAL_NOT_CURRENT")
+                    continue
+                condition = claim["conditions_of_use"] or "MLR_APPROVED_WORDING_ONLY"
+            else:
+                decision, condition = policy_decision(role, purpose, claim["data_class"])
+                if decision != "ALLOW":
+                    governed_blocked.append(condition)
+                    continue
             score = cosine(query_tokens, Counter(tokens(claim["claim_text"])))
             if score > 0:
                 governed_matches.append(
@@ -82,6 +92,8 @@ def hybrid_search(
                         "version": claim["version"],
                         "market": claim["market"],
                         "approval_status": claim["approval_status"],
+                        "effective_from_utc": claim["effective_from_utc"],
+                        "expires_at_utc": claim["expires_at_utc"],
                         "document_id": claim["document_id"],
                         "chunk_id": claim["chunk_id"],
                         "file_name": claim["file_name"],
