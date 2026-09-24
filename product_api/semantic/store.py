@@ -269,3 +269,219 @@ def concept_labels(conn: sqlite3.Connection, concept_ids: list[str]) -> list[str
         concept = get_concept(conn, concept_id)
         labels.append(concept["canonical_name"] if concept else concept_id)
     return sorted(labels)
+
+
+SEMANTIC_CHANGE_TYPES = {"ADD_ALIAS", "ADD_EXTERNAL_MAPPING", "UPDATE_CONCEPT"}
+
+
+def validate_semantic_change(
+    conn: sqlite3.Connection,
+    change_type: str,
+    concept_id: str,
+    payload: dict,
+) -> None:
+    if change_type not in SEMANTIC_CHANGE_TYPES:
+        raise ValueError("Unsupported semantic change type")
+    if not get_concept(conn, concept_id):
+        raise LookupError("Semantic concept not found")
+
+    if change_type == "ADD_ALIAS":
+        alias = str(payload.get("alias", "")).strip()
+        if len(alias) < 2:
+            raise ValueError("ADD_ALIAS requires an alias of at least 2 characters")
+        confidence = float(payload.get("confidence", 1.0))
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError("Alias confidence must be between 0 and 1")
+    elif change_type == "ADD_EXTERNAL_MAPPING":
+        if not str(payload.get("system", "")).strip():
+            raise ValueError("External mapping system is required")
+        if not str(payload.get("identifier", "")).strip():
+            raise ValueError("External mapping identifier is required")
+        if not str(payload.get("source_uri", "")).strip():
+            raise ValueError("External mapping source_uri is required")
+    elif change_type == "UPDATE_CONCEPT":
+        canonical_name = str(payload.get("canonical_name", "")).strip()
+        if len(canonical_name) < 2:
+            raise ValueError("UPDATE_CONCEPT requires canonical_name")
+
+
+def _clone_concept_version(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    created_at_utc: str,
+    canonical_name: str | None = None,
+) -> int:
+    current = get_concept(conn, concept_id)
+    if not current:
+        raise LookupError("Semantic concept not found")
+
+    old_version = int(current["version"])
+    new_version = old_version + 1
+    new_name = canonical_name.strip() if canonical_name else current["canonical_name"]
+
+    conn.execute(
+        "UPDATE semantic_concepts SET status='SUPERSEDED' WHERE concept_id=? AND version=?",
+        (concept_id, old_version),
+    )
+    conn.execute(
+        """INSERT INTO semantic_concepts
+           (concept_id, version, concept_type, canonical_name, semantic_version,
+            status, created_at_utc)
+           VALUES (?, ?, ?, ?, 'pharma-v3', 'ACTIVE', ?)""",
+        (concept_id, new_version, current["concept_type"], new_name, created_at_utc),
+    )
+
+    aliases = conn.execute(
+        """SELECT alias, normalized_alias, source, confidence
+           FROM semantic_aliases
+           WHERE concept_id=? AND concept_version=? AND status='ACTIVE'""",
+        (concept_id, old_version),
+    ).fetchall()
+    conn.execute(
+        """UPDATE semantic_aliases SET status='SUPERSEDED'
+           WHERE concept_id=? AND concept_version=? AND status='ACTIVE'""",
+        (concept_id, old_version),
+    )
+    for row in aliases:
+        conn.execute(
+            """INSERT INTO semantic_aliases
+               (alias_id, concept_id, concept_version, alias, normalized_alias,
+                source, confidence, status, created_at_utc)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)""",
+            (
+                f"ALS_{uuid.uuid4().hex[:12].upper()}",
+                concept_id,
+                new_version,
+                row["alias"],
+                row["normalized_alias"],
+                row["source"],
+                row["confidence"],
+                created_at_utc,
+            ),
+        )
+
+    mappings = conn.execute(
+        """SELECT system, identifier, source_uri
+           FROM semantic_external_mappings
+           WHERE concept_id=? AND concept_version=? AND status='ACTIVE'""",
+        (concept_id, old_version),
+    ).fetchall()
+    conn.execute(
+        """UPDATE semantic_external_mappings SET status='SUPERSEDED'
+           WHERE concept_id=? AND concept_version=? AND status='ACTIVE'""",
+        (concept_id, old_version),
+    )
+    for row in mappings:
+        conn.execute(
+            """INSERT INTO semantic_external_mappings
+               (mapping_id, concept_id, concept_version, system, identifier,
+                source_uri, status, created_at_utc)
+               VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?)""",
+            (
+                f"MAP_{uuid.uuid4().hex[:12].upper()}",
+                concept_id,
+                new_version,
+                row["system"],
+                row["identifier"],
+                row["source_uri"],
+                created_at_utc,
+            ),
+        )
+
+    relationships = conn.execute(
+        """SELECT relationship_id, source_concept_id, source_version,
+                  relationship_type, target_concept_id, target_version
+           FROM semantic_relationships
+           WHERE status='ACTIVE'
+             AND (source_concept_id=? OR target_concept_id=?)""",
+        (concept_id, concept_id),
+    ).fetchall()
+    for row in relationships:
+        source_id = row["source_concept_id"]
+        target_id = row["target_concept_id"]
+        source_version = new_version if source_id == concept_id else int(get_concept(conn, source_id)["version"])
+        target_version = new_version if target_id == concept_id else int(get_concept(conn, target_id)["version"])
+        conn.execute(
+            "UPDATE semantic_relationships SET status='SUPERSEDED' WHERE relationship_id=?",
+            (row["relationship_id"],),
+        )
+        conn.execute(
+            """INSERT OR IGNORE INTO semantic_relationships
+               (relationship_id, source_concept_id, source_version, relationship_type,
+                target_concept_id, target_version, semantic_version, status, created_at_utc)
+               VALUES (?, ?, ?, ?, ?, ?, 'pharma-v3', 'ACTIVE', ?)""",
+            (
+                f"SEMREL_{uuid.uuid4().hex[:12].upper()}",
+                source_id,
+                source_version,
+                row["relationship_type"],
+                target_id,
+                target_version,
+                created_at_utc,
+            ),
+        )
+
+    return new_version
+
+
+def apply_semantic_change(
+    conn: sqlite3.Connection,
+    change_type: str,
+    concept_id: str,
+    payload: dict,
+    created_at_utc: str,
+) -> int:
+    validate_semantic_change(conn, change_type, concept_id, payload)
+
+    canonical_name = payload.get("canonical_name") if change_type == "UPDATE_CONCEPT" else None
+    new_version = _clone_concept_version(
+        conn,
+        concept_id,
+        created_at_utc,
+        canonical_name=canonical_name,
+    )
+
+    if change_type == "ADD_ALIAS":
+        alias = str(payload["alias"]).strip()
+        normalized = normalize_alias(alias)
+        exists = conn.execute(
+            """SELECT alias_id FROM semantic_aliases
+               WHERE concept_id=? AND concept_version=? AND normalized_alias=? AND status='ACTIVE'""",
+            (concept_id, new_version, normalized),
+        ).fetchone()
+        if exists:
+            raise ValueError("Alias already exists for this concept")
+        conn.execute(
+            """INSERT INTO semantic_aliases
+               (alias_id, concept_id, concept_version, alias, normalized_alias,
+                source, confidence, status, created_at_utc)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)""",
+            (
+                f"ALS_{uuid.uuid4().hex[:12].upper()}",
+                concept_id,
+                new_version,
+                alias,
+                normalized,
+                str(payload.get("source", "GOVERNED_CHANGE")).strip() or "GOVERNED_CHANGE",
+                float(payload.get("confidence", 1.0)),
+                created_at_utc,
+            ),
+        )
+    elif change_type == "ADD_EXTERNAL_MAPPING":
+        conn.execute(
+            """INSERT INTO semantic_external_mappings
+               (mapping_id, concept_id, concept_version, system, identifier,
+                source_uri, status, created_at_utc)
+               VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?)""",
+            (
+                f"MAP_{uuid.uuid4().hex[:12].upper()}",
+                concept_id,
+                new_version,
+                str(payload["system"]).strip().upper(),
+                str(payload["identifier"]).strip(),
+                str(payload["source_uri"]).strip(),
+                created_at_utc,
+            ),
+        )
+
+    return new_version
