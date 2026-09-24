@@ -25,6 +25,14 @@ PROMPT_INJECTION = re.compile(
     r"developer\s+message|reveal\s+(?:your|the)\s+prompt",
     re.I,
 )
+KNOWN_ENTITIES = {
+    "zanubrutinib": ("DRUG", "zanubrutinib"),
+    "brukinsa": ("BRAND", "BRUKINSA"),
+    "ibrutinib": ("DRUG", "ibrutinib"),
+    "alpine": ("CLINICAL_TRIAL", "ALPINE"),
+    "cll": ("INDICATION", "CLL"),
+    "sll": ("INDICATION", "SLL"),
+}
 
 
 def _extract_pdf(path: Path) -> list[tuple[int | None, str]]:
@@ -88,6 +96,54 @@ def detect_findings(text: str) -> list[tuple[str, str, str]]:
             # Store counts, never the sensitive matched values.
             findings.append((finding_type, severity, str(len(matches))))
     return findings
+
+
+def _node(conn: sqlite3.Connection, tenant_id: str, node_type: str, label: str, properties: dict) -> str:
+    existing = conn.execute(
+        "SELECT node_id FROM graph_nodes WHERE tenant_id=? AND node_type=? AND label=?",
+        (tenant_id, node_type, label),
+    ).fetchone()
+    if existing:
+        return existing["node_id"]
+    node_id = f"NOD_{uuid.uuid4().hex[:12].upper()}"
+    conn.execute(
+        "INSERT INTO graph_nodes VALUES (?, ?, ?, ?, ?, ?)",
+        (node_id, tenant_id, node_type, label, json.dumps(properties, sort_keys=True), utc_now()),
+    )
+    return node_id
+
+
+def index_graph(conn: sqlite3.Connection, tenant_id: str, document: sqlite3.Row, chunks: list[tuple[int | None, str]]) -> int:
+    document_node = _node(
+        conn, tenant_id, "DOCUMENT", document["document_id"],
+        {"file_name": document["file_name"], "market": document["market"]},
+    )
+    edge_count = 0
+    for sequence, (page_number, chunk_text) in enumerate(chunks, start=1):
+        chunk_row = conn.execute(
+            "SELECT chunk_id FROM document_chunks WHERE tenant_id=? AND document_id=? AND chunk_sequence=?",
+            (tenant_id, document["document_id"], sequence),
+        ).fetchone()
+        chunk_node = _node(
+            conn, tenant_id, "EVIDENCE_CHUNK", chunk_row["chunk_id"],
+            {"document_id": document["document_id"], "page_number": page_number, "sequence": sequence},
+        )
+        for source, target, relationship in [(document_node, chunk_node, "CONTAINS_CHUNK")]:
+            conn.execute(
+                "INSERT OR IGNORE INTO graph_edges VALUES (?, ?, ?, ?, ?, ?)",
+                (f"EDG_{uuid.uuid4().hex[:12].upper()}", tenant_id, source, target, relationship, utc_now()),
+            )
+            edge_count += 1
+        lowered = chunk_text.lower()
+        for term, (node_type, label) in KNOWN_ENTITIES.items():
+            if re.search(rf"\b{re.escape(term)}\b", lowered):
+                entity_node = _node(conn, tenant_id, node_type, label, {})
+                conn.execute(
+                    "INSERT OR IGNORE INTO graph_edges VALUES (?, ?, ?, ?, ?, ?)",
+                    (f"EDG_{uuid.uuid4().hex[:12].upper()}", tenant_id, entity_node, chunk_node, "MENTIONED_IN", utc_now()),
+                )
+                edge_count += 1
+    return edge_count
 
 
 def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_worker") -> dict:
@@ -176,6 +232,12 @@ def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_w
                     ),
                 )
 
+            conn.execute(
+                "UPDATE ingestion_jobs SET stage='GRAPH_INDEXING', updated_at_utc=? WHERE job_id=?",
+                (utc_now(), job_id),
+            )
+            graph_edges = index_graph(conn, tenant_id, document, chunks)
+
             # No candidate becomes a claim here. Human validation remains mandatory.
             conn.execute(
                 "UPDATE documents SET status='READY_FOR_SME_REVIEW' WHERE document_id=? AND tenant_id=?",
@@ -196,6 +258,7 @@ def process_ingestion_job(job_id: str, tenant_id: str, actor_id: str = "system_w
                 "stage": "READY_FOR_SME_REVIEW",
                 "chunks_created": len(chunks),
                 "finding_types": [f[0] for f in findings],
+                "graph_edges_created": graph_edges,
                 "audit_id": audit_id,
                 "idempotent": False,
             }
