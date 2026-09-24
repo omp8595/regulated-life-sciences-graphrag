@@ -71,3 +71,11 @@ explicit authorization confirmation and a substantive rationale. A validated
 candidate becomes a versioned governed claim linked to its source chunk, while
 its approval state remains `NOT_MLR_REVIEWED`. SME validation never implies
 promotional approval.
+
+## MLR approval
+
+Every SME-validated claim enters `/v1/mlr/reviews`. Only authorized MLR,
+Regulatory, or Legal roles can decide a review. Approval requires explicit
+authorization confirmation, rationale, effective and expiry timestamps, and
+recorded conditions of use. `APPROVED_WITH_CHANGES` also requires the approved
+wording. Only a current `MLR_APPROVED` claim can support promotional use.
