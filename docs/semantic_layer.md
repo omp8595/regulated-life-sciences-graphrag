@@ -11,6 +11,21 @@ The semantic layer is deliberately separate from SME validation and MLR
 approval. It can normalize what an entity *is* and how curated concepts relate;
 it cannot decide that a scientific statement is true, approved, or promotional.
 
+## v2 semantic master
+
+Semantic concepts are now persisted as platform master data rather than used directly from Python constants. The bootstrap registry seeds the database idempotently, after which ingestion and retrieval read the active semantic master.
+
+The master uses four versioned tables:
+
+- `semantic_concepts` — stable concept ID + version, type, canonical name and lifecycle status.
+- `semantic_aliases` — normalized aliases with source and confidence, tied to a specific concept version.
+- `semantic_relationships` — typed relationships between specific concept versions.
+- `semantic_external_mappings` — links canonical concepts to authoritative external identifiers.
+
+The initial external mappings include ALPINE → ClinicalTrials.gov `NCT03734016`, zanubrutinib → RxNorm `2262435`, and CLL → MeSH `D015451`.
+
+An authenticated `GET /v1/semantic/concepts` endpoint exposes the current active catalog for inspection without granting write access.
+
 ## v1 architecture
 
 ```text
@@ -108,10 +123,8 @@ review and governed claims remain separate lifecycle stages.
 
 After v1 is stable, extend in this order:
 
-1. Persist semantic concepts and aliases as tenant-configurable master data
-   rather than Python constants.
-2. Add controlled external terminology mappings for drug, disease, study and
-   publication identifiers.
+1. Add controlled semantic-master change requests with reviewer approval, supersession and audit events.
+2. Add tenant overlay mappings for enterprise-local product, brand and study identifiers without copying the global master.
 3. Add endpoint, biomarker, mechanism, population, organization and publication
    concept types.
 4. Add document-level provenance to semantic relationship edges.
