@@ -8,6 +8,260 @@ import uuid
 from product_api.semantic.store import resolve_mentions
 
 
+REVIEWABLE_FIELDS = (
+    "study",
+    "population",
+    "intervention",
+    "comparator",
+    "endpoint",
+    "outcome",
+    "safety",
+)
+
+
+def _decoded_structure_row(row: sqlite3.Row) -> dict:
+    decoded = _decoded_structure_row(row)
+    state = get_review_state(conn, tenant_id, row["structure_id"])
+    decoded["review_progress"] = {
+        "required_fields": state["required_fields"],
+        "reviewed_fields": state["reviewed_fields"],
+        "missing_fields": state["missing_fields"],
+        "can_finalize": state["can_finalize"],
+    }
+    decoded["validated_payload"] = state["validated_payload"]
+    return decoded
+
+
+def _has_material_value(value) -> bool:
+    if isinstance(value, dict):
+        return any(_has_material_value(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_material_value(item) for item in value)
+    return value not in (None, "")
+
+
+def _empty_like(value):
+    if isinstance(value, dict):
+        return {}
+    if isinstance(value, list):
+        return []
+    return None
+
+
+def _latest_field_reviews(
+    conn: sqlite3.Connection,
+    tenant_id: str,
+    structure_id: str,
+) -> dict[str, dict]:
+    rows = conn.execute(
+        """SELECT * FROM evidence_intelligence_review_decisions
+           WHERE tenant_id=? AND structure_id=?
+           ORDER BY created_at_utc, review_id""",
+        (tenant_id, structure_id),
+    ).fetchall()
+    latest: dict[str, dict] = {}
+    for row in rows:
+        latest[row["field_name"]] = {
+            "review_id": row["review_id"],
+            "field_name": row["field_name"],
+            "decision": row["decision"],
+            "original_value": json.loads(row["original_value_json"]),
+            "reviewed_value": (
+                json.loads(row["reviewed_value_json"])
+                if row["reviewed_value_json"] is not None
+                else None
+            ),
+            "rationale": row["rationale"],
+            "reviewer_actor_id": row["reviewer_actor_id"],
+            "reviewer_role": row["reviewer_role"],
+            "created_at_utc": row["created_at_utc"],
+        }
+    return latest
+
+
+def get_review_state(
+    conn: sqlite3.Connection,
+    tenant_id: str,
+    structure_id: str,
+) -> dict:
+    row = conn.execute(
+        """SELECT * FROM evidence_intelligence
+           WHERE tenant_id=? AND structure_id=?""",
+        (tenant_id, structure_id),
+    ).fetchone()
+    if not row:
+        raise LookupError("Evidence intelligence record not found")
+
+    structure = _decoded_structure_row(row)
+    latest = _latest_field_reviews(conn, tenant_id, structure_id)
+    required_fields = [
+        field for field in REVIEWABLE_FIELDS if _has_material_value(structure[field])
+    ]
+    reviewed_fields = [field for field in required_fields if field in latest]
+    missing_fields = [field for field in required_fields if field not in latest]
+
+    validated_row = conn.execute(
+        """SELECT * FROM evidence_intelligence_validations
+           WHERE tenant_id=? AND structure_id=?""",
+        (tenant_id, structure_id),
+    ).fetchone()
+
+    return {
+        "structure": structure,
+        "required_fields": required_fields,
+        "reviewed_fields": reviewed_fields,
+        "missing_fields": missing_fields,
+        "field_reviews": latest,
+        "can_finalize": bool(required_fields) and not missing_fields,
+        "validated_payload": (
+            json.loads(validated_row["validated_payload_json"]) if validated_row else None
+        ),
+        "validation_id": validated_row["validation_id"] if validated_row else None,
+    }
+
+
+def record_field_review(
+    conn: sqlite3.Connection,
+    tenant_id: str,
+    structure_id: str,
+    field_name: str,
+    decision: str,
+    reviewed_value,
+    rationale: str,
+    reviewer_actor_id: str,
+    reviewer_role: str,
+    created_at_utc: str,
+) -> dict:
+    if field_name not in REVIEWABLE_FIELDS:
+        raise ValueError(f"Unsupported evidence field: {field_name}")
+    if decision not in {"VERIFIED", "CORRECTED", "REJECTED"}:
+        raise ValueError(f"Unsupported evidence review decision: {decision}")
+
+    row = conn.execute(
+        """SELECT * FROM evidence_intelligence
+           WHERE tenant_id=? AND structure_id=?""",
+        (tenant_id, structure_id),
+    ).fetchone()
+    if not row:
+        raise LookupError("Evidence intelligence record not found")
+    if row["review_status"] == "SME_VALIDATED_EVIDENCE":
+        raise ValueError("Validated evidence must be reopened before additional field review")
+
+    structure = _decoded_structure_row(row)
+    original_value = structure[field_name]
+    if not _has_material_value(original_value):
+        raise ValueError("Only populated extracted fields require evidence review")
+    if decision == "CORRECTED" and not _has_material_value(reviewed_value):
+        raise ValueError("A corrected value is required for CORRECTED")
+    if decision != "CORRECTED":
+        reviewed_value = None
+
+    review_id = f"EVR_{uuid.uuid4().hex[:12].upper()}"
+    conn.execute(
+        """INSERT INTO evidence_intelligence_review_decisions
+           (review_id, tenant_id, structure_id, field_name, decision,
+            original_value_json, reviewed_value_json, rationale,
+            reviewer_actor_id, reviewer_role, created_at_utc)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            review_id,
+            tenant_id,
+            structure_id,
+            field_name,
+            decision,
+            json.dumps(original_value, sort_keys=True),
+            json.dumps(reviewed_value, sort_keys=True) if reviewed_value is not None else None,
+            rationale,
+            reviewer_actor_id,
+            reviewer_role,
+            created_at_utc,
+        ),
+    )
+    conn.execute(
+        """UPDATE evidence_intelligence
+           SET review_status='PARTIALLY_REVIEWED'
+           WHERE tenant_id=? AND structure_id=?""",
+        (tenant_id, structure_id),
+    )
+    state = get_review_state(conn, tenant_id, structure_id)
+    return {
+        "review_id": review_id,
+        "structure_id": structure_id,
+        "field_name": field_name,
+        "decision": decision,
+        "review_status": "PARTIALLY_REVIEWED",
+        "remaining_fields": state["missing_fields"],
+    }
+
+
+def finalize_evidence_review(
+    conn: sqlite3.Connection,
+    tenant_id: str,
+    structure_id: str,
+    reviewer_actor_id: str,
+    reviewer_role: str,
+    rationale: str,
+    created_at_utc: str,
+) -> dict:
+    state = get_review_state(conn, tenant_id, structure_id)
+    if state["structure"]["review_status"] == "SME_VALIDATED_EVIDENCE":
+        raise ValueError("Evidence intelligence record is already validated")
+    if not state["required_fields"]:
+        raise ValueError("There are no populated scientific fields to validate")
+    if state["missing_fields"]:
+        raise ValueError(
+            "All populated evidence fields must be reviewed before finalization: "
+            + ", ".join(state["missing_fields"])
+        )
+
+    validated = {}
+    for field in REVIEWABLE_FIELDS:
+        original = state["structure"][field]
+        if field not in state["required_fields"]:
+            validated[field] = original
+            continue
+        review = state["field_reviews"][field]
+        if review["decision"] == "VERIFIED":
+            validated[field] = original
+        elif review["decision"] == "CORRECTED":
+            validated[field] = review["reviewed_value"]
+        else:
+            validated[field] = _empty_like(original)
+
+    validated["semantic_relationships"] = state["structure"]["semantic_relationships"]
+    validated["evidence_status"] = "SME_VALIDATED_EVIDENCE"
+
+    validation_id = f"EVV_{uuid.uuid4().hex[:12].upper()}"
+    conn.execute(
+        """INSERT INTO evidence_intelligence_validations
+           (validation_id, tenant_id, structure_id, validated_payload_json,
+            validated_by, validated_role, rationale, created_at_utc)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            validation_id,
+            tenant_id,
+            structure_id,
+            json.dumps(validated, sort_keys=True),
+            reviewer_actor_id,
+            reviewer_role,
+            rationale,
+            created_at_utc,
+        ),
+    )
+    conn.execute(
+        """UPDATE evidence_intelligence
+           SET review_status='SME_VALIDATED_EVIDENCE'
+           WHERE tenant_id=? AND structure_id=?""",
+        (tenant_id, structure_id),
+    )
+    return {
+        "validation_id": validation_id,
+        "structure_id": structure_id,
+        "review_status": "SME_VALIDATED_EVIDENCE",
+        "validated_payload": validated,
+    }
+
+
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 ENDPOINT_PATTERNS = (
     ("PFS", re.compile(r"\b(?:progression[- ]free survival|PFS)\b", re.I)),
@@ -256,6 +510,23 @@ def list_evidence_intelligence(
                 "semantic_relationships": json.loads(row["semantic_relationships_json"]),
                 "extraction_method": row["extraction_method"],
                 "review_status": row["review_status"],
+                "review_progress": {
+                    "required_fields": get_review_state(
+                        conn, tenant_id, row["structure_id"]
+                    )["required_fields"],
+                    "reviewed_fields": get_review_state(
+                        conn, tenant_id, row["structure_id"]
+                    )["reviewed_fields"],
+                    "missing_fields": get_review_state(
+                        conn, tenant_id, row["structure_id"]
+                    )["missing_fields"],
+                    "can_finalize": get_review_state(
+                        conn, tenant_id, row["structure_id"]
+                    )["can_finalize"],
+                },
+                "validated_payload": get_review_state(
+                    conn, tenant_id, row["structure_id"]
+                )["validated_payload"],
             }
         )
     return result
