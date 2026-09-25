@@ -658,7 +658,10 @@ class ProductApiTests(unittest.TestCase):
         self.assertEqual(candidate["validation_id"], validation_id)
         self.assertEqual(candidate["status"], "PENDING_MEDICAL_REVIEW")
         self.assertIn("In ALPINE", candidate["claim_text"])
-        self.assertIn("PFS was 78% versus 66% at 24 months.", candidate["claim_text"])
+        self.assertIn(
+            "Progression-free survival (PFS) was 78% versus 66% at 24 months.",
+            candidate["claim_text"],
+        )
         self.assertEqual(candidate["support"]["document_id"], upload["document_id"])
         self.assertEqual(candidate["support"]["validation_id"], validation_id)
         self.assertEqual(
