@@ -20,17 +20,19 @@ REVIEWABLE_FIELDS = (
 
 
 def _decoded_structure_row(row: sqlite3.Row) -> dict:
-    decoded = _decoded_structure_row(row)
-    state = get_review_state(conn, tenant_id, row["structure_id"])
-    decoded["review_progress"] = {
-        "required_fields": state["required_fields"],
-        "reviewed_fields": state["reviewed_fields"],
-        "missing_fields": state["missing_fields"],
-        "can_finalize": state["can_finalize"],
+    return {
+        "structure_id": row["structure_id"],
+        "study": json.loads(row["study_json"]),
+        "population": json.loads(row["population_json"]),
+        "intervention": json.loads(row["intervention_json"]),
+        "comparator": json.loads(row["comparator_json"]),
+        "endpoint": json.loads(row["endpoint_json"]),
+        "outcome": json.loads(row["outcome_json"]),
+        "safety": json.loads(row["safety_json"]),
+        "semantic_relationships": json.loads(row["semantic_relationships_json"]),
+        "extraction_method": row["extraction_method"],
+        "review_status": row["review_status"],
     }
-    decoded["validated_payload"] = state["validated_payload"]
-    return decoded
-
 
 def _has_material_value(value) -> bool:
     if isinstance(value, dict):
@@ -455,20 +457,16 @@ def get_evidence_intelligence(
     ).fetchone()
     if not row:
         return None
-    return {
-        "structure_id": row["structure_id"],
-        "study": json.loads(row["study_json"]),
-        "population": json.loads(row["population_json"]),
-        "intervention": json.loads(row["intervention_json"]),
-        "comparator": json.loads(row["comparator_json"]),
-        "endpoint": json.loads(row["endpoint_json"]),
-        "outcome": json.loads(row["outcome_json"]),
-        "safety": json.loads(row["safety_json"]),
-        "semantic_relationships": json.loads(row["semantic_relationships_json"]),
-        "extraction_method": row["extraction_method"],
-        "review_status": row["review_status"],
+    decoded = _decoded_structure_row(row)
+    state = get_review_state(conn, tenant_id, row["structure_id"])
+    decoded["review_progress"] = {
+        "required_fields": state["required_fields"],
+        "reviewed_fields": state["reviewed_fields"],
+        "missing_fields": state["missing_fields"],
+        "can_finalize": state["can_finalize"],
     }
-
+    decoded["validated_payload"] = state["validated_payload"]
+    return decoded
 
 def list_evidence_intelligence(
     conn: sqlite3.Connection,
