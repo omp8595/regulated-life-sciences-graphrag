@@ -254,6 +254,68 @@ def run_query_workspace(api_key, question, purpose, market, top_k):
     )
 
 
+def refresh_evidence_review(api_key):
+    queue = _result(_client().get("/v1/evidence/review-queue", headers=_bearer(api_key)))
+    choices = [item["structure_id"] for item in queue]
+    return gr.update(choices=choices, value=choices[0] if choices else None), queue
+
+
+def refresh_evidence_review_state(api_key, structure_id):
+    if not structure_id:
+        raise gr.Error("Select an evidence structure.")
+    return _result(
+        _client().get(
+            f"/v1/evidence/intelligence/{structure_id}/reviews",
+            headers=_bearer(api_key),
+        )
+    )
+
+
+def record_evidence_field_review(
+    api_key,
+    structure_id,
+    field_name,
+    decision,
+    corrected_value_json,
+    rationale,
+):
+    if not structure_id:
+        raise gr.Error("Select an evidence structure.")
+    reviewed_value = None
+    if decision == "CORRECTED":
+        try:
+            reviewed_value = json.loads(corrected_value_json)
+        except json.JSONDecodeError as exc:
+            raise gr.Error("Corrected value must be valid JSON.") from exc
+    return _result(
+        _client().post(
+            f"/v1/evidence/intelligence/{structure_id}/reviews",
+            headers=_bearer(api_key),
+            json={
+                "field_name": field_name,
+                "decision": decision,
+                "reviewed_value": reviewed_value,
+                "rationale": rationale,
+            },
+        )
+    )
+
+
+def finalize_evidence_review_ui(api_key, structure_id, rationale, confirmed):
+    if not structure_id:
+        raise gr.Error("Select an evidence structure.")
+    return _result(
+        _client().post(
+            f"/v1/evidence/intelligence/{structure_id}/finalize",
+            headers=_bearer(api_key),
+            json={
+                "rationale": rationale,
+                "authorization_confirmed": confirmed,
+            },
+        )
+    )
+
+
 def refresh_sme(api_key):
     candidates = _result(_client().get("/v1/sme/candidates", headers=_bearer(api_key)))
     choices = [candidate["candidate_id"] for candidate in candidates]
@@ -383,6 +445,7 @@ def governance_status(api_key):
         for label, table in {
             "Documents": "documents",
             "Evidence chunks": "document_chunks",
+            "Structured evidence": "evidence_intelligence",
             "Pending SME candidates": "candidate_claims",
             "Governed claims": "governed_claims",
             "MLR decisions": "mlr_review_decisions",
@@ -511,6 +574,78 @@ def build_ui():
                 run_query_workspace,
                 [api_key, question, purpose, query_market, top_k],
                 [query_summary, query_scientific, query_evidence, query_provenance, query_output],
+            )
+
+        with gr.Tab("Evidence review"):
+            gr.Markdown(
+                "Review machine-extracted scientific structure field by field. "
+                "The original extraction is preserved; corrections are stored as separate audited SME decisions."
+            )
+            evidence_review_refresh = gr.Button("Refresh evidence review queue")
+            evidence_structure_id = gr.Dropdown([], label="Evidence structure")
+            evidence_review_queue = gr.JSON(label="Pending / partial evidence structures")
+            evidence_review_refresh.click(
+                refresh_evidence_review,
+                api_key,
+                [evidence_structure_id, evidence_review_queue],
+            )
+
+            evidence_state_refresh = gr.Button("Load review state")
+            evidence_review_state = gr.JSON(label="Current extraction and field-review state")
+            evidence_state_refresh.click(
+                refresh_evidence_review_state,
+                [api_key, evidence_structure_id],
+                evidence_review_state,
+            )
+
+            with gr.Row():
+                evidence_field = gr.Dropdown(
+                    ["study", "population", "intervention", "comparator", "endpoint", "outcome", "safety"],
+                    value="study",
+                    label="Scientific field",
+                )
+                evidence_field_decision = gr.Radio(
+                    ["VERIFIED", "CORRECTED", "REJECTED"],
+                    value="VERIFIED",
+                    label="SME decision",
+                )
+            corrected_value = gr.Textbox(
+                label="Corrected value as JSON — required only for CORRECTED",
+                placeholder='e.g. ["PFS"] or {"indications":["CLL"],"context":["..."]}',
+                lines=4,
+            )
+            evidence_field_rationale = gr.Textbox(label="Field-review rationale", lines=4)
+            evidence_field_submit = gr.Button("Record field review")
+            evidence_field_result = gr.JSON(label="Field-review result")
+            evidence_field_submit.click(
+                record_evidence_field_review,
+                [
+                    api_key,
+                    evidence_structure_id,
+                    evidence_field,
+                    evidence_field_decision,
+                    corrected_value,
+                    evidence_field_rationale,
+                ],
+                evidence_field_result,
+            )
+
+            gr.Markdown("### Finalize SME evidence validation")
+            evidence_finalize_rationale = gr.Textbox(label="Final validation rationale", lines=4)
+            evidence_finalize_confirm = gr.Checkbox(
+                label="I confirm that I am genuinely authorized to validate this structured scientific evidence"
+            )
+            evidence_finalize = gr.Button("Promote to SME_VALIDATED_EVIDENCE", variant="primary")
+            evidence_finalize_result = gr.JSON(label="Evidence validation result")
+            evidence_finalize.click(
+                finalize_evidence_review_ui,
+                [
+                    api_key,
+                    evidence_structure_id,
+                    evidence_finalize_rationale,
+                    evidence_finalize_confirm,
+                ],
+                evidence_finalize_result,
             )
 
         with gr.Tab("SME validation"):
