@@ -153,6 +153,8 @@ def record_field_review(
         raise ValueError("Only populated extracted fields require evidence review")
     if decision == "CORRECTED" and not _has_material_value(reviewed_value):
         raise ValueError("A corrected value is required for CORRECTED")
+    if decision == "CORRECTED" and type(reviewed_value) is not type(original_value):
+        raise ValueError("Corrected value must preserve the extracted field data shape")
     if decision != "CORRECTED":
         reviewed_value = None
 
