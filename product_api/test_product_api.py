@@ -486,8 +486,7 @@ class ProductApiTests(unittest.TestCase):
         corrected_population = {
             "indications": ["chronic lymphocytic leukemia"],
             "context": [
-                "ALPINE evaluated zanubrutinib and ibrutinib in patients with relapsed or refractory "
-                "chronic lymphocytic leukemia (CLL)."
+                "patients with relapsed or refractory chronic lymphocytic leukemia (CLL)"
             ],
         }
         decisions = {
