@@ -27,7 +27,9 @@ class ProductApiTests(unittest.TestCase):
                 "mlr_review_decisions", "mlr_review_queue", "governed_claim_evidence",
                 "governed_claims", "sme_review_decisions",
                 "candidate_claims", "graph_edges", "graph_nodes", "document_findings",
-                "evidence_intelligence_validations", "evidence_intelligence_review_decisions",
+                "medical_validated_composed_claims", "composed_claim_review_decisions",
+                "composed_claim_candidates", "evidence_intelligence_validations",
+                "evidence_intelligence_review_decisions",
                 "evidence_intelligence", "document_chunks", "audit_events", "api_principals",
                 "ingestion_jobs", "documents", "tenants",
             ):
@@ -562,6 +564,187 @@ class ProductApiTests(unittest.TestCase):
         audit = self.client.get(
             "/v1/audit/verify",
             headers={"X-Tenant-ID": "tenant_a", "X-Actor-ID": "evidence_sme", "X-Role": "ROLE_MEDICAL"},
+        ).json()
+        self.assertTrue(audit["valid"])
+
+    def test_governed_claim_composition_requires_validated_evidence_and_independent_medical_review(self):
+        content = (
+            b"ALPINE evaluated zanubrutinib and ibrutinib in patients with relapsed or refractory "
+            b"chronic lymphocytic leukemia (CLL). Progression-free survival (PFS) was 78% versus "
+            b"66% at 24 months. Atrial fibrillation occurred in 5% versus 13%."
+        )
+        upload = self.client.post(
+            "/v1/documents",
+            headers=self.headers("tenant_a"),
+            files={"file": ("claim_source.txt", content, "text/plain")},
+            data={
+                "market": "Global",
+                "data_class": "MEDICAL_SCIENTIFIC_EVIDENCE",
+                "sensitivity": "MEDICAL_ONLY",
+            },
+        ).json()
+        process_ingestion_job(upload["job_id"], "tenant_a")
+
+        def issue(actor, role):
+            return self.client.post(
+                "/v1/auth/api-keys",
+                headers={"X-Platform-Admin-Key": "test-platform-admin-key"},
+                json={"tenant_id": "tenant_a", "actor_id": actor, "role": role},
+            ).json()["api_key"]
+
+        composer_key = issue("claim_composer", "ROLE_MEDICAL")
+        reviewer_key = issue("claim_reviewer", "ROLE_REGULATORY")
+        composer_auth = {"Authorization": f"Bearer {composer_key}"}
+        reviewer_auth = {"Authorization": f"Bearer {reviewer_key}"}
+
+        evidence_queue = self.client.get(
+            "/v1/evidence/review-queue", headers=composer_auth
+        ).json()
+        structure_id = evidence_queue[0]["structure_id"]
+
+        blocked_before_validation = self.client.post(
+            "/v1/claims/compose",
+            headers=composer_auth,
+            json={"structure_id": structure_id, "claim_kind": "EFFICACY_ENDPOINT"},
+        )
+        self.assertEqual(blocked_before_validation.status_code, 409)
+        self.assertIn(
+            "Only SME_VALIDATED_EVIDENCE",
+            blocked_before_validation.json()["detail"],
+        )
+
+        state = self.client.get(
+            f"/v1/evidence/intelligence/{structure_id}/reviews",
+            headers=composer_auth,
+        ).json()
+        for field_name in state["required_fields"]:
+            reviewed = self.client.post(
+                f"/v1/evidence/intelligence/{structure_id}/reviews",
+                headers=composer_auth,
+                json={
+                    "field_name": field_name,
+                    "decision": "VERIFIED",
+                    "reviewed_value": None,
+                    "rationale": f"Validated {field_name} directly against the supplied source passage.",
+                },
+            )
+            self.assertEqual(reviewed.status_code, 201)
+
+        finalized = self.client.post(
+            f"/v1/evidence/intelligence/{structure_id}/finalize",
+            headers=composer_auth,
+            json={
+                "rationale": "All structured evidence fields were reviewed against the source passage.",
+                "authorization_confirmed": True,
+            },
+        )
+        self.assertEqual(finalized.status_code, 200)
+        validation_id = finalized.json()["validation_id"]
+
+        sources = self.client.get(
+            "/v1/claims/composition-sources",
+            headers=composer_auth,
+        )
+        self.assertEqual(sources.status_code, 200)
+        self.assertEqual(sources.json()[0]["structure_id"], structure_id)
+
+        composed = self.client.post(
+            "/v1/claims/compose",
+            headers=composer_auth,
+            json={"structure_id": structure_id, "claim_kind": "EFFICACY_ENDPOINT"},
+        )
+        self.assertEqual(composed.status_code, 201)
+        candidate = composed.json()
+        self.assertEqual(candidate["validation_id"], validation_id)
+        self.assertEqual(candidate["status"], "PENDING_MEDICAL_REVIEW")
+        self.assertIn("In ALPINE", candidate["claim_text"])
+        self.assertIn(
+            "Progression-free survival (PFS) was 78% versus 66% at 24 months.",
+            candidate["claim_text"],
+        )
+        self.assertEqual(candidate["support"]["document_id"], upload["document_id"])
+        self.assertEqual(candidate["support"]["validation_id"], validation_id)
+        self.assertEqual(
+            candidate["support"]["validated_fields"]["outcome"],
+            ["Progression-free survival (PFS) was 78% versus 66% at 24 months."],
+        )
+        candidate_id = candidate["candidate_id"]
+
+        duplicate = self.client.post(
+            "/v1/claims/compose",
+            headers=composer_auth,
+            json={"structure_id": structure_id, "claim_kind": "EFFICACY_ENDPOINT"},
+        )
+        self.assertEqual(duplicate.status_code, 409)
+
+        self_review = self.client.post(
+            f"/v1/claims/composed-candidates/{candidate_id}/decisions",
+            headers=composer_auth,
+            json={
+                "decision": "VALIDATED",
+                "rationale": "Attempting to validate a claim created by the same actor for control testing.",
+                "authorization_confirmed": True,
+            },
+        )
+        self.assertEqual(self_review.status_code, 403)
+
+        no_confirmation = self.client.post(
+            f"/v1/claims/composed-candidates/{candidate_id}/decisions",
+            headers=reviewer_auth,
+            json={
+                "decision": "VALIDATED",
+                "rationale": "Independent Medical review confirms the claim is traceable to validated evidence.",
+                "authorization_confirmed": False,
+            },
+        )
+        self.assertEqual(no_confirmation.status_code, 403)
+
+        approved = self.client.post(
+            f"/v1/claims/composed-candidates/{candidate_id}/decisions",
+            headers=reviewer_auth,
+            json={
+                "decision": "VALIDATED",
+                "rationale": "Independent Medical review confirms the claim is traceable to validated evidence.",
+                "authorization_confirmed": True,
+            },
+        )
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.json()["approval_status"], "NOT_MLR_REVIEWED")
+        self.assertTrue(approved.json()["claim_id"].startswith("CCLM_"))
+
+        validated_claims = self.client.get(
+            "/v1/claims/medical-validated",
+            headers=reviewer_auth,
+        ).json()
+        self.assertEqual(len(validated_claims), 1)
+        self.assertEqual(
+            validated_claims[0]["approval_status"],
+            "NOT_MLR_REVIEWED",
+        )
+        self.assertEqual(
+            validated_claims[0]["support"]["validation_id"],
+            validation_id,
+        )
+
+        commercial_key = issue("commercial_claim_test", "ROLE_COMMERCIAL")
+        promotional = self.client.post(
+            "/v1/query",
+            headers={"Authorization": f"Bearer {commercial_key}"},
+            json={
+                "question": "PFS 78%",
+                "purpose": "PROMOTIONAL_CONTENT",
+                "market": "Global",
+            },
+        ).json()
+        self.assertNotEqual(promotional["status"], "ANSWERED")
+
+        audit = self.client.get(
+            "/v1/audit/verify",
+            headers={
+                "X-Tenant-ID": "tenant_a",
+                "X-Actor-ID": "claim_auditor",
+                "X-Role": "ROLE_REGULATORY",
+            },
         ).json()
         self.assertTrue(audit["valid"])
 

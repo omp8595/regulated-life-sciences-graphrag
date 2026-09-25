@@ -2,6 +2,8 @@
 
 A governed hybrid GraphRAG platform for regulated life-sciences workflows, demonstrated with public BRUKINSA/zanubrutinib and ALPINE evidence.
 
+> **Product north star:** This is not positioned as a generic pharma chatbot. The target is a governed scientific context layer that converts fragmented evidence into validated knowledge, traceable claims, and policy-controlled AI answers. See [docs/product_north_star.md](docs/product_north_star.md).
+
 ## Platform flow
 
 ```text
@@ -45,7 +47,11 @@ Source documents
 - `smoke_test.py` — deterministic role, purpose and market smoke tests
 - `product_api/` — multi-tenant ingestion, semantic normalization, governed retrieval and audit API
 - `product_api/semantic/` — canonical pharma concepts, aliases and typed relationships
+- `docs/product_north_star.md` — business issue, root causes, product thesis, personas, governance, architecture, policy model, KPIs, roadmap, and implementation status
 - `docs/semantic_layer.md` — Semantic Layer v1 architecture and extension strategy
+- `docs/evidence_intelligence.md` — deterministic scientific evidence structuring
+- `docs/evidence_review.md` — field-level SME evidence validation
+- `docs/governed_claim_composition.md` — evidence-bound claim composition and independent Medical review
 - `product_ui.py` — unified ingestion, query, SME, MLR and governance workspace
 - `platform_artifacts/` — database, graph, retrieval index, policies, audit logs, test results, and source documents
 - `release/` — complete downloadable ZIP archive

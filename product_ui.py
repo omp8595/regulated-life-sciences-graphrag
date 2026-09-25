@@ -316,6 +316,59 @@ def finalize_evidence_review_ui(api_key, structure_id, rationale, confirmed):
     )
 
 
+def refresh_claim_composition_sources(api_key):
+    sources = _result(
+        _client().get("/v1/claims/composition-sources", headers=_bearer(api_key))
+    )
+    choices = [item["structure_id"] for item in sources]
+    return gr.update(choices=choices, value=choices[0] if choices else None), sources
+
+
+def compose_claim_ui(api_key, structure_id, claim_kind):
+    if not structure_id:
+        raise gr.Error("Select SME-validated evidence.")
+    return _result(
+        _client().post(
+            "/v1/claims/compose",
+            headers=_bearer(api_key),
+            json={"structure_id": structure_id, "claim_kind": claim_kind},
+        )
+    )
+
+
+def refresh_composed_claim_candidates(api_key):
+    candidates = _result(
+        _client().get(
+            "/v1/claims/composed-candidates?status=PENDING_MEDICAL_REVIEW",
+            headers=_bearer(api_key),
+        )
+    )
+    choices = [item["candidate_id"] for item in candidates]
+    return gr.update(choices=choices, value=choices[0] if choices else None), candidates
+
+
+def review_composed_claim_ui(api_key, candidate_id, decision, rationale, confirmed):
+    if not candidate_id:
+        raise gr.Error("Select a composed claim candidate.")
+    return _result(
+        _client().post(
+            f"/v1/claims/composed-candidates/{candidate_id}/decisions",
+            headers=_bearer(api_key),
+            json={
+                "decision": decision,
+                "rationale": rationale,
+                "authorization_confirmed": confirmed,
+            },
+        )
+    )
+
+
+def refresh_medical_validated_claims(api_key):
+    return _result(
+        _client().get("/v1/claims/medical-validated", headers=_bearer(api_key))
+    )
+
+
 def refresh_sme(api_key):
     candidates = _result(_client().get("/v1/sme/candidates", headers=_bearer(api_key)))
     choices = [candidate["candidate_id"] for candidate in candidates]
@@ -446,6 +499,7 @@ def governance_status(api_key):
             "Documents": "documents",
             "Evidence chunks": "document_chunks",
             "Structured evidence": "evidence_intelligence",
+            "Medical-validated composed claims": "medical_validated_composed_claims",
             "Pending SME candidates": "candidate_claims",
             "Governed claims": "governed_claims",
             "MLR decisions": "mlr_review_decisions",
@@ -646,6 +700,77 @@ def build_ui():
                     evidence_finalize_confirm,
                 ],
                 evidence_finalize_result,
+            )
+
+        with gr.Tab("Claim composer"):
+            gr.Markdown(
+                "Compose deterministic candidate claims only from SME-validated structured evidence. "
+                "Every claim retains the evidence validation ID, document/chunk lineage and exact supporting source sentence."
+            )
+            claim_source_refresh = gr.Button("Refresh validated evidence sources")
+            claim_structure_id = gr.Dropdown([], label="SME-validated evidence structure")
+            claim_sources = gr.JSON(label="Eligible composition sources")
+            claim_source_refresh.click(
+                refresh_claim_composition_sources,
+                api_key,
+                [claim_structure_id, claim_sources],
+            )
+            claim_kind = gr.Radio(
+                ["EFFICACY_ENDPOINT", "SAFETY"],
+                value="EFFICACY_ENDPOINT",
+                label="Claim kind",
+            )
+            claim_compose = gr.Button("Compose evidence-bound candidate", variant="primary")
+            claim_compose_result = gr.JSON(label="Composed candidate and support package")
+            claim_compose.click(
+                compose_claim_ui,
+                [api_key, claim_structure_id, claim_kind],
+                claim_compose_result,
+            )
+
+            gr.Markdown(
+                "### Independent Medical review\n"
+                "The actor who composed a candidate cannot validate the same candidate. "
+                "Switch the API key to an independent authorized Medical, Clinical or Regulatory reviewer."
+            )
+            composed_refresh = gr.Button("Refresh pending composed claims")
+            composed_candidate_id = gr.Dropdown([], label="Pending composed claim")
+            composed_candidates = gr.JSON(label="Pending Medical review queue")
+            composed_refresh.click(
+                refresh_composed_claim_candidates,
+                api_key,
+                [composed_candidate_id, composed_candidates],
+            )
+            composed_decision = gr.Radio(
+                ["VALIDATED", "REJECTED", "NEEDS_REVISION"],
+                value="NEEDS_REVISION",
+                label="Medical decision",
+            )
+            composed_rationale = gr.Textbox(label="Medical review rationale", lines=4)
+            composed_confirm = gr.Checkbox(
+                label="I confirm that I am genuinely authorized to validate this composed medical claim"
+            )
+            composed_decide = gr.Button("Record composed-claim decision")
+            composed_decision_result = gr.JSON(label="Medical claim-review result")
+            composed_decide.click(
+                review_composed_claim_ui,
+                [
+                    api_key,
+                    composed_candidate_id,
+                    composed_decision,
+                    composed_rationale,
+                    composed_confirm,
+                ],
+                composed_decision_result,
+            )
+
+            gr.Markdown("### Medical-validated claims awaiting MLR")
+            validated_claims_refresh = gr.Button("Refresh medical-validated claims")
+            validated_claims = gr.JSON(label="NOT_MLR_REVIEWED composed claims")
+            validated_claims_refresh.click(
+                refresh_medical_validated_claims,
+                api_key,
+                validated_claims,
             )
 
         with gr.Tab("SME validation"):
