@@ -156,6 +156,43 @@ def initialize_database() -> None:
                 created_at_utc TEXT NOT NULL,
                 UNIQUE(tenant_id, structure_id)
             );
+            CREATE TABLE IF NOT EXISTS composed_claim_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                structure_id TEXT NOT NULL REFERENCES evidence_intelligence(structure_id),
+                validation_id TEXT NOT NULL REFERENCES evidence_intelligence_validations(validation_id),
+                claim_kind TEXT NOT NULL,
+                claim_text TEXT NOT NULL,
+                support_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                created_role TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS composed_claim_review_decisions (
+                decision_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                candidate_id TEXT NOT NULL REFERENCES composed_claim_candidates(candidate_id),
+                reviewer_actor_id TEXT NOT NULL,
+                reviewer_role TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS medical_validated_composed_claims (
+                claim_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                candidate_id TEXT NOT NULL REFERENCES composed_claim_candidates(candidate_id),
+                claim_kind TEXT NOT NULL,
+                claim_text TEXT NOT NULL,
+                support_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                approval_status TEXT NOT NULL,
+                validated_by TEXT NOT NULL,
+                validated_role TEXT NOT NULL,
+                validated_at_utc TEXT NOT NULL,
+                UNIQUE(tenant_id, candidate_id)
+            );
             CREATE TABLE IF NOT EXISTS semantic_concepts (
                 concept_id TEXT NOT NULL,
                 version INTEGER NOT NULL,
@@ -341,6 +378,12 @@ def initialize_database() -> None:
                 ON evidence_intelligence_review_decisions(tenant_id, structure_id, field_name, created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_evidence_validations_structure
                 ON evidence_intelligence_validations(tenant_id, structure_id);
+            CREATE INDEX IF NOT EXISTS idx_composed_candidates_tenant_status
+                ON composed_claim_candidates(tenant_id, status, created_at_utc);
+            CREATE INDEX IF NOT EXISTS idx_composed_reviews_candidate
+                ON composed_claim_review_decisions(tenant_id, candidate_id, created_at_utc);
+            CREATE INDEX IF NOT EXISTS idx_medical_validated_composed_claims
+                ON medical_validated_composed_claims(tenant_id, approval_status, validated_at_utc);
             CREATE INDEX IF NOT EXISTS idx_graph_nodes_tenant
                 ON graph_nodes(tenant_id, node_type, label);
             CREATE INDEX IF NOT EXISTS idx_graph_edges_tenant
@@ -485,6 +528,17 @@ class EvidenceFieldReviewRequest(BaseModel):
 
 
 class EvidenceFinalizeRequest(BaseModel):
+    rationale: str = Field(min_length=20, max_length=4000)
+    authorization_confirmed: bool
+
+
+class ClaimCompositionRequest(BaseModel):
+    structure_id: str = Field(min_length=3, max_length=160)
+    claim_kind: str = Field(pattern=r"^(EFFICACY_ENDPOINT|SAFETY)$")
+
+
+class ComposedClaimDecisionRequest(BaseModel):
+    decision: str = Field(pattern=r"^(VALIDATED|REJECTED|NEEDS_REVISION)$")
     rationale: str = Field(min_length=20, max_length=4000)
     authorization_confirmed: bool
 
@@ -945,6 +999,131 @@ def finalize_evidence_validation(
             },
         )
     return {**result, "audit_id": audit_id}
+
+
+@app.get("/v1/claims/composition-sources")
+def claim_composition_sources(
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> list[dict]:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized Medical evidence role is required")
+    from product_api.claim_composition import list_composition_sources
+
+    with connection() as conn:
+        return list_composition_sources(conn, principal.tenant_id)
+
+
+@app.post("/v1/claims/compose", status_code=201)
+def compose_governed_claim_candidate(
+    request: ClaimCompositionRequest,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized Medical evidence role is required")
+    from product_api.claim_composition import compose_claim_candidate
+
+    with connection() as conn:
+        try:
+            result = compose_claim_candidate(
+                conn,
+                principal.tenant_id,
+                request.structure_id,
+                request.claim_kind,
+                principal.actor_id,
+                principal.role,
+                utc_now(),
+            )
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        audit_id = append_audit(
+            conn,
+            principal,
+            "COMPOSED_CLAIM_CREATED",
+            result["candidate_id"],
+            {
+                "structure_id": request.structure_id,
+                "validation_id": result["validation_id"],
+                "claim_kind": request.claim_kind,
+            },
+        )
+    return {**result, "audit_id": audit_id}
+
+
+@app.get("/v1/claims/composed-candidates")
+def composed_claim_candidates(
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+    status: str | None = None,
+) -> list[dict]:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized Medical claim-review role is required")
+    from product_api.claim_composition import list_composed_claim_candidates
+
+    with connection() as conn:
+        return list_composed_claim_candidates(conn, principal.tenant_id, status)
+
+
+@app.post("/v1/claims/composed-candidates/{candidate_id}/decisions")
+def review_composed_claim(
+    candidate_id: str,
+    request: ComposedClaimDecisionRequest,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized Medical claim-review role is required")
+    if request.decision == "VALIDATED" and not request.authorization_confirmed:
+        raise HTTPException(403, "Explicit Medical claim-validation confirmation is required")
+    from product_api.claim_composition import review_composed_claim_candidate
+
+    with connection() as conn:
+        try:
+            result = review_composed_claim_candidate(
+                conn,
+                principal.tenant_id,
+                candidate_id,
+                request.decision,
+                request.rationale,
+                principal.actor_id,
+                principal.role,
+                utc_now(),
+            )
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            message = str(exc)
+            status_code = 403 if "independent Medical review" in message else 409
+            raise HTTPException(status_code, message) from exc
+        audit_id = append_audit(
+            conn,
+            principal,
+            "COMPOSED_CLAIM_REVIEWED",
+            candidate_id,
+            {
+                "decision_id": result["decision_id"],
+                "decision": result["decision"],
+                "claim_id": result["claim_id"],
+                "approval_status": result["approval_status"],
+            },
+        )
+    return {**result, "audit_id": audit_id}
+
+
+@app.get("/v1/claims/medical-validated")
+def medical_validated_composed_claims(
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> list[dict]:
+    if principal.role not in {
+        "ROLE_MEDICAL",
+        "ROLE_CLINICAL",
+        "ROLE_REGULATORY",
+        "ROLE_MLR_REVIEWER",
+    }:
+        raise HTTPException(403, "An authorized claim-review role is required")
+    from product_api.claim_composition import list_medical_validated_composed_claims
+
+    with connection() as conn:
+        return list_medical_validated_composed_claims(conn, principal.tenant_id)
 
 
 @app.get("/v1/sme/candidates")
