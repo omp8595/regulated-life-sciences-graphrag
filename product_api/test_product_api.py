@@ -27,6 +27,7 @@ class ProductApiTests(unittest.TestCase):
                 "mlr_review_decisions", "mlr_review_queue", "governed_claim_evidence",
                 "governed_claims", "sme_review_decisions",
                 "candidate_claims", "graph_edges", "graph_nodes", "document_findings",
+                "evidence_intelligence_validations", "evidence_intelligence_review_decisions",
                 "evidence_intelligence", "document_chunks", "audit_events", "api_principals",
                 "ingestion_jobs", "documents", "tenants",
             ):
@@ -440,6 +441,129 @@ class ProductApiTests(unittest.TestCase):
             result["results"][0]["evidence_intelligence"]["review_status"],
             "UNVALIDATED_EXTRACTION",
         )
+
+    def test_evidence_review_requires_complete_field_review_and_preserves_original_extraction(self):
+        content = (
+            b"ALPINE evaluated zanubrutinib and ibrutinib in patients with relapsed or refractory "
+            b"chronic lymphocytic leukemia (CLL). Progression-free survival (PFS) was 78% versus "
+            b"66% at 24 months. Atrial fibrillation occurred in 5% versus 13%."
+        )
+        upload = self.client.post(
+            "/v1/documents",
+            headers=self.headers("tenant_a"),
+            files={"file": ("reviewable_evidence.txt", content, "text/plain")},
+            data={
+                "market": "Global",
+                "data_class": "MEDICAL_SCIENTIFIC_EVIDENCE",
+                "sensitivity": "MEDICAL_ONLY",
+            },
+        ).json()
+        process_ingestion_job(upload["job_id"], "tenant_a")
+
+        api_key = self.client.post(
+            "/v1/auth/api-keys",
+            headers={"X-Platform-Admin-Key": "test-platform-admin-key"},
+            json={"tenant_id": "tenant_a", "actor_id": "evidence_sme", "role": "ROLE_MEDICAL"},
+        ).json()["api_key"]
+        auth = {"Authorization": f"Bearer {api_key}"}
+
+        queue = self.client.get("/v1/evidence/review-queue", headers=auth)
+        self.assertEqual(queue.status_code, 200)
+        self.assertEqual(len(queue.json()), 1)
+        structure_id = queue.json()[0]["structure_id"]
+
+        premature = self.client.post(
+            f"/v1/evidence/intelligence/{structure_id}/finalize",
+            headers=auth,
+            json={
+                "rationale": "I reviewed the available scientific extraction and source evidence.",
+                "authorization_confirmed": True,
+            },
+        )
+        self.assertEqual(premature.status_code, 409)
+        self.assertIn("All populated evidence fields", premature.json()["detail"])
+
+        corrected_population = {
+            "indications": ["chronic lymphocytic leukemia"],
+            "context": [
+                "patients with relapsed or refractory chronic lymphocytic leukemia (CLL)"
+            ],
+        }
+        decisions = {
+            "study": ("VERIFIED", None),
+            "population": ("CORRECTED", corrected_population),
+            "intervention": ("VERIFIED", None),
+            "comparator": ("VERIFIED", None),
+            "endpoint": ("VERIFIED", None),
+            "outcome": ("VERIFIED", None),
+            "safety": ("VERIFIED", None),
+        }
+        for field_name, (decision, reviewed_value) in decisions.items():
+            response = self.client.post(
+                f"/v1/evidence/intelligence/{structure_id}/reviews",
+                headers=auth,
+                json={
+                    "field_name": field_name,
+                    "decision": decision,
+                    "reviewed_value": reviewed_value,
+                    "rationale": f"SME reviewed the extracted {field_name} against the source passage.",
+                },
+            )
+            self.assertEqual(response.status_code, 201)
+
+        state = self.client.get(
+            f"/v1/evidence/intelligence/{structure_id}/reviews",
+            headers=auth,
+        ).json()
+        self.assertTrue(state["can_finalize"])
+        self.assertEqual(state["missing_fields"], [])
+        self.assertNotEqual(state["structure"]["population"], corrected_population)
+        self.assertEqual(
+            state["field_reviews"]["population"]["reviewed_value"],
+            corrected_population,
+        )
+        self.assertEqual(state["structure"]["review_status"], "PARTIALLY_REVIEWED")
+
+        missing_confirmation = self.client.post(
+            f"/v1/evidence/intelligence/{structure_id}/finalize",
+            headers=auth,
+            json={
+                "rationale": "All populated scientific fields were reviewed against the source evidence.",
+                "authorization_confirmed": False,
+            },
+        )
+        self.assertEqual(missing_confirmation.status_code, 403)
+
+        finalized = self.client.post(
+            f"/v1/evidence/intelligence/{structure_id}/finalize",
+            headers=auth,
+            json={
+                "rationale": "All populated scientific fields were reviewed against the source evidence.",
+                "authorization_confirmed": True,
+            },
+        )
+        self.assertEqual(finalized.status_code, 200)
+        result = finalized.json()
+        self.assertEqual(result["review_status"], "SME_VALIDATED_EVIDENCE")
+        self.assertEqual(result["validated_payload"]["population"], corrected_population)
+        self.assertTrue(result["validation_id"].startswith("EVV_"))
+        self.assertTrue(result["audit_id"].startswith("AUD_"))
+
+        catalog = self.client.get("/v1/evidence/intelligence", headers=auth).json()
+        self.assertEqual(catalog[0]["review_status"], "SME_VALIDATED_EVIDENCE")
+        self.assertEqual(
+            catalog[0]["validated_payload"]["population"],
+            corrected_population,
+        )
+
+        queue_after = self.client.get("/v1/evidence/review-queue", headers=auth).json()
+        self.assertEqual(queue_after, [])
+
+        audit = self.client.get(
+            "/v1/audit/verify",
+            headers={"X-Tenant-ID": "tenant_a", "X-Actor-ID": "evidence_sme", "X-Role": "ROLE_MEDICAL"},
+        ).json()
+        self.assertTrue(audit["valid"])
 
     def test_medical_evidence_workspace_formats_semantics_governance_and_lineage(self):
         from product_ui import (

@@ -9,7 +9,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -131,6 +131,30 @@ def initialize_database() -> None:
                 review_status TEXT NOT NULL,
                 created_at_utc TEXT NOT NULL,
                 UNIQUE(tenant_id, chunk_id)
+            );
+            CREATE TABLE IF NOT EXISTS evidence_intelligence_review_decisions (
+                review_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                structure_id TEXT NOT NULL REFERENCES evidence_intelligence(structure_id),
+                field_name TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                original_value_json TEXT NOT NULL,
+                reviewed_value_json TEXT,
+                rationale TEXT NOT NULL,
+                reviewer_actor_id TEXT NOT NULL,
+                reviewer_role TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS evidence_intelligence_validations (
+                validation_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                structure_id TEXT NOT NULL REFERENCES evidence_intelligence(structure_id),
+                validated_payload_json TEXT NOT NULL,
+                validated_by TEXT NOT NULL,
+                validated_role TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(tenant_id, structure_id)
             );
             CREATE TABLE IF NOT EXISTS semantic_concepts (
                 concept_id TEXT NOT NULL,
@@ -313,6 +337,10 @@ def initialize_database() -> None:
                 ON document_chunks(tenant_id, document_id, chunk_sequence);
             CREATE INDEX IF NOT EXISTS idx_evidence_intelligence_tenant_document
                 ON evidence_intelligence(tenant_id, document_id, chunk_id);
+            CREATE INDEX IF NOT EXISTS idx_evidence_reviews_structure
+                ON evidence_intelligence_review_decisions(tenant_id, structure_id, field_name, created_at_utc);
+            CREATE INDEX IF NOT EXISTS idx_evidence_validations_structure
+                ON evidence_intelligence_validations(tenant_id, structure_id);
             CREATE INDEX IF NOT EXISTS idx_graph_nodes_tenant
                 ON graph_nodes(tenant_id, node_type, label);
             CREATE INDEX IF NOT EXISTS idx_graph_edges_tenant
@@ -443,6 +471,20 @@ class SemanticChangeRequest(BaseModel):
 
 class SemanticChangeDecisionRequest(BaseModel):
     decision: str = Field(pattern=r"^(APPROVED|REJECTED)$")
+    rationale: str = Field(min_length=20, max_length=4000)
+    authorization_confirmed: bool
+
+
+class EvidenceFieldReviewRequest(BaseModel):
+    field_name: str = Field(
+        pattern=r"^(study|population|intervention|comparator|endpoint|outcome|safety)$"
+    )
+    decision: str = Field(pattern=r"^(VERIFIED|CORRECTED|REJECTED)$")
+    reviewed_value: Any | None = None
+    rationale: str = Field(min_length=20, max_length=4000)
+
+
+class EvidenceFinalizeRequest(BaseModel):
     rationale: str = Field(min_length=20, max_length=4000)
     authorization_confirmed: bool
 
@@ -787,6 +829,122 @@ def evidence_intelligence_catalog(
 
     with connection() as conn:
         return list_evidence_intelligence(conn, principal.tenant_id, document_id)
+
+
+@app.get("/v1/evidence/review-queue")
+def evidence_review_queue(
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> list[dict]:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized SME evidence-review role is required")
+    from product_api.evidence_intelligence import list_evidence_intelligence
+
+    with connection() as conn:
+        records = list_evidence_intelligence(conn, principal.tenant_id)
+    return [
+        record for record in records
+        if record["review_status"] != "SME_VALIDATED_EVIDENCE"
+        and record["review_progress"]["required_fields"]
+    ]
+
+
+@app.get("/v1/evidence/intelligence/{structure_id}/reviews")
+def evidence_review_state(
+    structure_id: str,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized SME evidence-review role is required")
+    from product_api.evidence_intelligence import get_review_state
+
+    with connection() as conn:
+        try:
+            return get_review_state(conn, principal.tenant_id, structure_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/v1/evidence/intelligence/{structure_id}/reviews", status_code=201)
+def review_evidence_field(
+    structure_id: str,
+    request: EvidenceFieldReviewRequest,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized SME evidence-review role is required")
+    from product_api.evidence_intelligence import record_field_review
+
+    with connection() as conn:
+        try:
+            result = record_field_review(
+                conn,
+                principal.tenant_id,
+                structure_id,
+                request.field_name,
+                request.decision,
+                request.reviewed_value,
+                request.rationale,
+                principal.actor_id,
+                principal.role,
+                utc_now(),
+            )
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        audit_id = append_audit(
+            conn,
+            principal,
+            "EVIDENCE_FIELD_REVIEWED",
+            structure_id,
+            {
+                "review_id": result["review_id"],
+                "field_name": request.field_name,
+                "decision": request.decision,
+                "remaining_fields": result["remaining_fields"],
+            },
+        )
+    return {**result, "audit_id": audit_id}
+
+
+@app.post("/v1/evidence/intelligence/{structure_id}/finalize")
+def finalize_evidence_validation(
+    structure_id: str,
+    request: EvidenceFinalizeRequest,
+    principal: Annotated[TenantContext, Depends(authenticated_principal)],
+) -> dict:
+    if principal.role not in {"ROLE_MEDICAL", "ROLE_CLINICAL", "ROLE_REGULATORY"}:
+        raise HTTPException(403, "An authorized SME evidence-review role is required")
+    if not request.authorization_confirmed:
+        raise HTTPException(403, "Explicit SME evidence-validation confirmation is required")
+    from product_api.evidence_intelligence import finalize_evidence_review
+
+    with connection() as conn:
+        try:
+            result = finalize_evidence_review(
+                conn,
+                principal.tenant_id,
+                structure_id,
+                principal.actor_id,
+                principal.role,
+                request.rationale,
+                utc_now(),
+            )
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        audit_id = append_audit(
+            conn,
+            principal,
+            "EVIDENCE_SME_VALIDATED",
+            structure_id,
+            {
+                "validation_id": result["validation_id"],
+                "review_status": result["review_status"],
+            },
+        )
+    return {**result, "audit_id": audit_id}
 
 
 @app.get("/v1/sme/candidates")
