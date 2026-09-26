@@ -12,10 +12,13 @@ Source documents
     → entity and claim extraction
     → semantic vectors and knowledge graph
     → hybrid vector + lexical + multi-hop graph retrieval
-    → role, purpose, market and data-class policy evaluation
+    → role + purpose + market + audience + approval/validity policy evaluation
     → governed answer | evidence discovery | blocked request | abstention
     → source citations and graph lineage
-    → SME validation and MLR review
+    → SME evidence validation
+    → evidence-bound claim composition
+    → independent Medical claim review
+    → MLR approval and governed-use activation
     → hash-linked audit trail and governance testing
 ```
 
@@ -25,9 +28,14 @@ Source documents
 - Governed semantic change requests with independent approval, version supersession and audit lineage
 - Hybrid lexical retrieval and graph traversal with one-hop semantic expansion
 - Multi-hop GraphRAG with source, document, page, and chunk lineage
-- Role-, purpose-, market-, and data-class-aware access controls
+- Evidence Intelligence for Study → Population → Intervention → Comparator → Endpoint → Outcome → Safety
+- Field-level SME evidence verification, correction and rejection
+- Deterministic evidence-bound claim composition
+- Independent Medical claim review
+- Composed-claim MLR submission and approval activation
+- Role-, purpose-, market-, audience-, approval-, and validity-aware runtime controls
+- Exact approved-wording enforcement for promotional retrieval
 - Governed answers, evidence discovery, policy blocks, and abstention
-- SME candidate review and MLR workflow artifacts
 - Hash-linked audit records
 - SQLite, GraphML, CSV, and packaged runtime artifacts
 
@@ -35,24 +43,30 @@ Source documents
 
 | Layer | Result |
 |---|---:|
-| Core governance | 21/21 |
-| GraphRAG governance | 14/14 |
-| Indexed evidence chunks | 221 |
-| Graph nodes | 244 |
-| Graph edges | 521 |
+| Core governance | CI regression suite |
+| Semantic smoke test | Passing on feature branches |
+| Evidence review | Field-level validation covered |
+| Claim composition | Evidence-bound + separation-of-duties covered |
+| MLR activation | Scope + validity + exact wording covered |
+| Audience policy | HCP-vs-patient scope covered |
 
 ## Repository structure
 
-- `app.py` — runnable governed GraphRAG Gradio interface
+- `app.py` — original governed GraphRAG Gradio interface
 - `smoke_test.py` — deterministic role, purpose and market smoke tests
-- `product_api/` — multi-tenant ingestion, semantic normalization, governed retrieval and audit API
+- `product_api/` — multi-tenant ingestion, semantic normalization, governed retrieval, evidence/claim governance, and audit API
 - `product_api/semantic/` — canonical pharma concepts, aliases and typed relationships
+- `product_api/mlr_activation.py` — MLR submission, independent review, activation and validity lifecycle for evidence-bound composed claims
+- `product_api/audience_query.py` — audience-aware contextual governed query contract
 - `docs/product_north_star.md` — business issue, root causes, product thesis, personas, governance, architecture, policy model, KPIs, roadmap, and implementation status
 - `docs/semantic_layer.md` — Semantic Layer v1 architecture and extension strategy
 - `docs/evidence_intelligence.md` — deterministic scientific evidence structuring
 - `docs/evidence_review.md` — field-level SME evidence validation
 - `docs/governed_claim_composition.md` — evidence-bound claim composition and independent Medical review
-- `product_ui.py` — unified ingestion, query, SME, MLR and governance workspace
+- `docs/mlr_activation.md` — composed-claim MLR and governed-use activation model
+- `docs/audience_policy.md` — market/purpose/audience runtime policy and fail-closed behavior
+- `product_ui.py` — original unified product workspace
+- `product_journey_ui.py` — recommended end-to-end evidence → SME → Medical → MLR → governed-use demonstration workspace
 - `platform_artifacts/` — database, graph, retrieval index, policies, audit logs, test results, and source documents
 - `release/` — complete downloadable ZIP archive
 - `requirements.txt` — Python dependencies for rebuilding the prototype
@@ -73,14 +87,24 @@ uvicorn product_api.app:app --reload --port 8000
 
 The interactive API documentation is available at `http://127.0.0.1:8000/docs`.
 
-Run the unified product interface:
+### Recommended end-to-end product demo
 
 ```bash
 export PLATFORM_ADMIN_KEY="configure-in-your-secret-manager"
+GRADIO_SHARE=true python product_journey_ui.py
+```
+
+This workspace demonstrates the North Star lifecycle in one place: evidence ingestion → SME validation → claim composition → independent Medical validation → MLR → audience-aware governed consumption.
+
+The original product workspace remains available with:
+
+```bash
 GRADIO_SHARE=true python product_ui.py
 ```
 
-The smoke suite verifies governed US dosage, promotional blocking, medical evidence discovery and India-market abstention.
+### Audience-aware governed query
+
+Use `POST /v1/query/contextual` when market/purpose/audience policy must be explicit. The legacy `/v1/query` endpoint is retained for backward compatibility and fails closed for audience-specific promotional approvals when audience is not provided.
 
 ## Important notice
 
