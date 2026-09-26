@@ -6,12 +6,23 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from product_api.app import connection, initialize_database
-from product_api.semantic.store import concept_labels, resolve_mentions, semantic_match
 from product_api.evidence_intelligence import get_evidence_intelligence
+from product_api.mlr_activation import (
+    ensure_mlr_activation_schema,
+    list_eligible_composed_activations,
+    list_medical_composed_claims,
+)
+from product_api.semantic.store import concept_labels, resolve_mentions, semantic_match
 
 
 WORD = re.compile(r"[a-zA-Z0-9]+")
 MEDICAL_CLASSES = {"MEDICAL_SCIENTIFIC_EVIDENCE", "CLINICAL_RESTRICTED", "PATIENT_LEVEL_DATA"}
+MEDICAL_GOVERNED_ROLES = {
+    "ROLE_MEDICAL",
+    "ROLE_CLINICAL",
+    "ROLE_REGULATORY",
+    "ROLE_MLR_REVIEWER",
+}
 
 
 def tokens(text: str) -> list[str]:
@@ -36,6 +47,63 @@ def policy_decision(role: str, purpose: str, data_class: str) -> tuple[str, str]
     return "ALLOW", "CITATION_REQUIRED"
 
 
+def _score_text(conn, question: str, query_tokens: Counter, text: str) -> tuple[float, float, dict]:
+    lexical = cosine(query_tokens, Counter(tokens(text)))
+    semantic = semantic_match(conn, question, text)
+    score = (0.75 * lexical) + (0.25 * semantic["score"])
+    return score, lexical, semantic
+
+
+def _composed_claim_result(
+    conn,
+    tenant_id: str,
+    question: str,
+    query_tokens: Counter,
+    claim: dict,
+    text: str,
+    usage_condition: str,
+    activation: dict | None = None,
+) -> dict | None:
+    score, lexical, semantic = _score_text(conn, question, query_tokens, text)
+    if score <= 0:
+        return None
+    support = claim["support"]
+    result = {
+        "claim_id": claim["claim_id"],
+        "claim_text": text,
+        "claim_type": claim["claim_kind"],
+        "version": 1,
+        "market": activation["market"] if activation else "Validated medical evidence",
+        "approval_status": claim["approval_status"],
+        "effective_from_utc": activation["effective_from_utc"] if activation else None,
+        "expires_at_utc": activation["expires_at_utc"] if activation else None,
+        "document_id": support["document_id"],
+        "chunk_id": support["chunk_id"],
+        "file_name": support["file_name"],
+        "score": round(score, 4),
+        "lexical_score": round(lexical, 4),
+        "semantic_score": semantic["score"],
+        "semantic_direct_matches": concept_labels(conn, semantic["direct_matches"]),
+        "semantic_related_matches": concept_labels(conn, semantic["related_matches"]),
+        "usage_condition": usage_condition,
+        "evidence_validation_id": support["validation_id"],
+        "evidence_structure_id": support["structure_id"],
+        "evidence_intelligence": get_evidence_intelligence(conn, tenant_id, support["chunk_id"]),
+        "claim_source": "EVIDENCE_BOUND_COMPOSED_CLAIM",
+    }
+    if activation:
+        result.update(
+            {
+                "activation_id": activation["activation_id"],
+                "purpose_scope": activation["purpose"],
+                "audience_scope": activation["audience"],
+                "conditions_of_use": activation["conditions_of_use"],
+                "approved_wording_only": True,
+            }
+        )
+    return result
+
+
 def hybrid_search(
     question: str,
     tenant_id: str,
@@ -45,9 +113,104 @@ def hybrid_search(
     top_k: int = 5,
 ) -> dict:
     initialize_database()
+    ensure_mlr_activation_schema()
     query_tokens = Counter(tokens(question))
     with connection() as conn:
         anchors = sorted({mention.canonical_name for mention in resolve_mentions(conn, question)})
+        governed_blocked: list[str] = []
+
+        # New evidence-bound claim path. Promotional use can only return the exact
+        # currently effective MLR-approved wording. Because the current QueryRequest
+        # does not yet carry audience, only approvals scoped to ALL are eligible.
+        if purpose == "PROMOTIONAL_CONTENT":
+            composed_matches = []
+            activations = list_eligible_composed_activations(
+                conn,
+                tenant_id,
+                purpose,
+                market,
+                audience=None,
+            )
+            for activation in activations:
+                result = _composed_claim_result(
+                    conn,
+                    tenant_id,
+                    question,
+                    query_tokens,
+                    activation,
+                    activation["approved_wording"],
+                    activation["conditions_of_use"] or "MLR_APPROVED_WORDING_ONLY",
+                    activation=activation,
+                )
+                if result:
+                    composed_matches.append(result)
+            composed_matches.sort(key=lambda item: item["score"], reverse=True)
+            if composed_matches:
+                claims = composed_matches[: max(1, min(top_k, 20))]
+                return {
+                    "status": "ANSWERED",
+                    "response_type": "GOVERNED_ANSWER",
+                    "tenant_id": tenant_id,
+                    "market": market,
+                    "resolved_entities": anchors,
+                    "answer": " ".join(claim["claim_text"] for claim in claims),
+                    "governed_claims": claims,
+                    "result_count": len(claims),
+                    "results": [],
+                    "governance_message": (
+                        "The response uses currently effective MLR-approved wording "
+                        "from evidence-bound composed claims."
+                    ),
+                }
+
+            # If a relevant Medical-validated composed claim exists but there is no
+            # applicable activation, preserve BLOCK rather than falling back to raw
+            # evidence or unconstrained generation.
+            for claim in list_medical_composed_claims(conn, tenant_id):
+                score, _, _ = _score_text(conn, question, query_tokens, claim["claim_text"])
+                if score > 0:
+                    if claim["approval_status"] == "MLR_APPROVED":
+                        governed_blocked.append("MLR_APPROVAL_SCOPE_OR_VALIDITY_MISMATCH")
+                    else:
+                        governed_blocked.append("MLR_APPROVAL_REQUIRED")
+
+        # Medical/Regulatory use can consume independently Medical-validated
+        # evidence-bound claims before MLR. These claims remain non-promotional.
+        elif role in MEDICAL_GOVERNED_ROLES:
+            composed_medical_matches = []
+            for claim in list_medical_composed_claims(conn, tenant_id):
+                result = _composed_claim_result(
+                    conn,
+                    tenant_id,
+                    question,
+                    query_tokens,
+                    claim,
+                    claim["claim_text"],
+                    "MEDICAL_VALIDATED_NON_PROMOTIONAL",
+                )
+                if result:
+                    composed_medical_matches.append(result)
+            composed_medical_matches.sort(key=lambda item: item["score"], reverse=True)
+            if composed_medical_matches:
+                claims = composed_medical_matches[: max(1, min(top_k, 20))]
+                return {
+                    "status": "ANSWERED",
+                    "response_type": "GOVERNED_ANSWER",
+                    "tenant_id": tenant_id,
+                    "market": market,
+                    "resolved_entities": anchors,
+                    "answer": " ".join(claim["claim_text"] for claim in claims),
+                    "governed_claims": claims,
+                    "result_count": len(claims),
+                    "results": [],
+                    "governance_message": (
+                        "The response uses independently Medical-validated, evidence-bound "
+                        "claims. Promotional use still requires an applicable MLR approval."
+                    ),
+                }
+
+        # Legacy governed-claim path retained for backward compatibility with the
+        # original prototype workflow.
         claim_rows = conn.execute(
             """SELECT g.*, e.document_id, e.chunk_id, d.file_name
                FROM governed_claims g
@@ -60,7 +223,6 @@ def hybrid_search(
             (tenant_id, market),
         ).fetchall()
         governed_matches = []
-        governed_blocked = []
         for claim in claim_rows:
             if purpose == "PROMOTIONAL_CONTENT":
                 if claim["approval_status"] != "MLR_APPROVED":
@@ -191,7 +353,8 @@ def hybrid_search(
             "market": market,
             "result_count": 0,
             "results": [],
-            "governance_message": "Evidence exists but is not permitted for this role and purpose.",
+            "block_reasons": sorted(set(blocked_conditions)),
+            "governance_message": "Evidence exists but is not permitted for this role, purpose, market, or approval state.",
         }
     return {
         "status": "ABSTAIN",
