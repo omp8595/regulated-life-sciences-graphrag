@@ -19,6 +19,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run product API tests
-        run: python -m unittest discover -s product_api -p "test*.py"
+        run: python -m unittest product_api.test_product_api
+      - name: Run composed-claim MLR activation test
+        run: python -m unittest product_api.test_z_mlr_activation
       - name: Run Kaggle semantic smoke test
         run: python kaggle_semantic_smoke.py
